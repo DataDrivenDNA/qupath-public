@@ -104,6 +104,16 @@ public interface PathTableData<T> {
 	 */
 	double getNumericValue(final T item, final String name);
 
+	/** A value for interactive display; implementations may return NaN while work is pending. */
+	default double getNumericValueForDisplay(T item, String name) {
+		return getNumericValue(item, name);
+	}
+
+	/** Values for interactive plots, without waiting for pending display calculations. */
+	default double[] getDoubleValuesForDisplay(String name) {
+		return getItems().stream().mapToDouble(item -> getNumericValueForDisplay(item, name)).toArray();
+	}
+
 	/**
 	 * Get all double values for all items of a specified measurement.
 	 * @param name the measurement name

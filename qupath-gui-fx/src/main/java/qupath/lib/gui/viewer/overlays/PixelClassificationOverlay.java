@@ -37,6 +37,7 @@ import qupath.lib.geom.Point2;
 import qupath.lib.gui.QuPathGUI;
 import qupath.lib.gui.images.stores.ImageRenderer;
 import qupath.lib.gui.prefs.PathPrefs;
+import qupath.lib.gui.tools.BackgroundCache;
 import qupath.lib.gui.viewer.OverlayOptions;
 import qupath.lib.gui.viewer.RegionFilter;
 import qupath.lib.images.ImageData;
@@ -46,6 +47,8 @@ import qupath.lib.images.servers.PixelCalibration;
 import qupath.lib.images.servers.ServerTools;
 import qupath.lib.images.servers.TileRequest;
 import qupath.lib.objects.PathObject;
+import qupath.lib.objects.hierarchy.PathObjectHierarchy;
+import qupath.lib.objects.hierarchy.events.PathObjectHierarchyListener;
 import qupath.lib.regions.ImageRegion;
 import qupath.lib.regions.RegionRequest;
 import qupath.opencv.ops.ImageDataOp;
@@ -102,8 +105,16 @@ public class PixelClassificationOverlay extends AbstractImageOverlay  {
     private final ObservableBooleanValue showOverlay;
 
 	private RegionFilter lastRegionFilter;
-	private final Map<RegionRequest, Boolean> acceptedTiles = new HashMap<>();
-	private long lastHierarchyEventCount = -1L;
+	private final Map<PathObjectHierarchy, BackgroundCache<RegionRequest, Boolean>> acceptedTiles =
+			Collections.synchronizedMap(new WeakHashMap<>());
+	private final PathObjectHierarchyListener filterInvalidation = event -> {
+		// Tile measurement notifications do not change annotation geometry. Invalidating on them
+		// would repeatedly discard the very region checks needed to finish painting the overlay.
+		if (!event.isObjectMeasurementEvent() || !(event.getSource() instanceof PixelClassificationOverlay)) {
+			resetAcceptedTiles();
+			Platform.runLater(this::repaintAllViewers);
+		}
+	};
     
     private PixelClassificationOverlay(final OverlayOptions options, final int nThreads, final Function<ImageData<BufferedImage>, ImageServer<BufferedImage>> fun) {
         super(options);
@@ -386,6 +397,12 @@ public class PixelClassificationOverlay extends AbstractImageOverlay  {
 
         // If we have a filter, we might not need to do anything
     	var filter = getOverlayOptions().getPixelClassificationRegionFilter();
+		var acceptedForHierarchy = acceptedTiles.computeIfAbsent(imageData.getHierarchy(), hierarchy -> {
+			hierarchy.addListener(filterInvalidation);
+			var cache = new BackgroundCache<RegionRequest, Boolean>(pool);
+			cache.revisionProperty().addListener((obs, oldValue, newValue) -> repaintAllViewers());
+			return cache;
+		});
 		if (!Objects.equals(filter, lastRegionFilter)) {
 			resetAcceptedTiles();
 			lastRegionFilter = filter;
@@ -444,17 +461,9 @@ public class PixelClassificationOverlay extends AbstractImageOverlay  {
         	var request = tile.getRegionRequest();
         	
         	if (filter != null) {
-				// For very complex geometries, computing intersections can be very expensive -
-				// so this allows us to reduce those calculations slightly
-				if (lastHierarchyEventCount != imageData.getHierarchy().getEventCount()) {
-					// Technically we might have the same event count but a different image...
-					// however we still shouldn't find tiles in the cache wrongly, because the TileRequest
-					// won't correspond (based on the server having a unique path)
-					resetAcceptedTiles();
-					lastHierarchyEventCount = imageData.getHierarchy().getEventCount();
-				}
-				// Apply the test
-				if (!acceptedTiles.computeIfAbsent(request, r -> filter.test(imageData, r))) {
+				// Geometry intersections may take minutes for large classified annotations.
+				// Paint only completed checks; the worker requests a repaint when ready.
+				if (!Boolean.TRUE.equals(acceptedForHierarchy.get(request, () -> filter.test(imageData, request)))) {
 					continue;
 				}
 			}
@@ -480,8 +489,9 @@ public class PixelClassificationOverlay extends AbstractImageOverlay  {
     }
 
 	private void resetAcceptedTiles() {
-		acceptedTiles.clear();
-		lastHierarchyEventCount = -1;
+		synchronized (acceptedTiles) {
+			acceptedTiles.values().forEach(BackgroundCache::clear);
+		}
 	}
     
     /**
@@ -541,6 +551,11 @@ public class PixelClassificationOverlay extends AbstractImageOverlay  {
      * Stop the overlap, halting any pending tile requests.
      */
     public void stop() {
+        resetAcceptedTiles();
+        synchronized (acceptedTiles) {
+            acceptedTiles.keySet().forEach(hierarchy -> hierarchy.removeListener(filterInvalidation));
+            acceptedTiles.clear();
+        }
     	List<Runnable> pending = this.pool.shutdownNow();
     	clearCache();
     	logger.debug("Stopped classification overlay, dropped {} requests", pending.size());

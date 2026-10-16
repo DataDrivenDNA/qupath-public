@@ -104,7 +104,7 @@ public class PixelClassificationMeasurementManager {
 		this.classifierServer = classifierServer;
 		synchronized (measuredROIs) {
 			if (!measuredROIs.containsKey(classifierServer))
-				measuredROIs.put(classifierServer, new HashMap<>());
+				measuredROIs.put(classifierServer, new ConcurrentHashMap<>());
 		}
 		
         // Calculate area of a pixel
@@ -222,6 +222,17 @@ public class PixelClassificationMeasurementManager {
 			return null;
 		else
 			return ml.get(name);
+	}
+
+	/**
+	 * Calculate all measurements from cached tiles, returning an empty map if tiles are missing.
+	 * This can perform expensive geometry operations and must not be called on a user-interface thread.
+	 * @param object object to measure
+	 * @return an immutable snapshot of the measurements
+	 */
+	public Map<String, Number> getCachedMeasurements(PathObject object) {
+		var measurements = getMeasurementList(getROI(object), null);
+		return measurements == null ? Collections.emptyMap() : Map.copyOf(measurements.asMap());
 	}
 
 	/**
@@ -354,13 +365,7 @@ public class PixelClassificationMeasurementManager {
 		if (roi == null)
 			return null;
 		var map = measuredROIs.computeIfAbsent(classifierServer, s -> new ConcurrentHashMap<>());
-		var ml = map.getOrDefault(roi, null);
-		if (ml == null) {
-			ml = calculateMeasurements(roi, pool);
-			if (ml != null)
-				map.put(roi, ml);
-		}
-		return ml;
+		return map.computeIfAbsent(roi, r -> calculateMeasurements(r, pool));
 	}
 
 
@@ -443,10 +448,16 @@ public class PixelClassificationMeasurementManager {
 	        var regionRequest = RegionRequest.createInstance(server.getPath(), requestedDownsample, roi);
 	        requests = server.getTileRequestManager().getTileRequests(regionRequest);
 	        // Skip tiles that don't intersect with the ROI shape
-	        if (shape != null) {
-	        	var shapeTemp = shape;
-	        	requests = requests.stream().filter(r -> mayIntersectTile(shapeTemp, r, r.getDownsample())).toList();
-	        }
+            if (shape != null) {
+            var intersecting = new ArrayList<TileRequest>();
+            for (var request : requests) {
+                if (Thread.currentThread().isInterrupted())
+                    return null;
+                if (mayIntersectTile(shape, request, request.getDownsample()))
+                    intersecting.add(request);
+            }
+            requests = intersecting;
+            }
         } else
         	requests = Collections.emptyList();
         
@@ -462,6 +473,8 @@ public class PixelClassificationMeasurementManager {
         List<TileRequest> tilesToRequest = new ArrayList<>();
 		List<TileRequest> missingTiles = new ArrayList<>();
 		for (TileRequest request : requests) {
+			if (Thread.currentThread().isInterrupted())
+				return null;
         	BufferedImage tile = classifierServer.getCachedTile(request);
 			// If we only accept cached tiles, and we don't have one, return immediately
 			if (cachedOnly && tile == null) {
@@ -512,6 +525,8 @@ public class PixelClassificationMeasurementManager {
     	long startTime = System.currentTimeMillis();
     	
         for (var region : tilesToRequest) {
+			if (Thread.currentThread().isInterrupted())
+				return null;
         	// Remove from the local cache (so eligible for garbage collection sooner)
         	BufferedImage tile = localCache.remove(region);
         	

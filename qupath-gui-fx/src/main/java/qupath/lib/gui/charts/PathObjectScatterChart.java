@@ -595,8 +595,8 @@ public class PathObjectScatterChart extends ScatterChart<Number, Number> {
                           PathTableData<PathObject> model,
                           String xMeasurement, String yMeasurement) {
         setData(pathObjects,
-                p -> model.getNumericValue(p, xMeasurement),
-                p -> model.getNumericValue(p, yMeasurement));
+                p -> model.getNumericValueForDisplay(p, xMeasurement),
+                p -> model.getNumericValueForDisplay(p, yMeasurement));
         getXAxis().setLabel(xMeasurement);
         getYAxis().setLabel(yMeasurement);
     }

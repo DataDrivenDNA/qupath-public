@@ -24,6 +24,11 @@
 package qupath.lib.gui.measure;
 
 import javafx.application.Platform;
+import javafx.beans.value.ChangeListener;
+import javafx.beans.value.ObservableValue;
+import javafx.beans.value.WeakChangeListener;
+import javafx.beans.property.ReadOnlyLongProperty;
+import javafx.beans.property.ReadOnlyLongWrapper;
 import javafx.beans.property.ReadOnlyListWrapper;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
@@ -46,6 +51,8 @@ import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.function.Predicate;
 
 /**
@@ -77,6 +84,39 @@ public class ObservableMeasurementTableData implements PathTableData<PathObject>
 	private final ObservableList<String> measurementColumnList = FXCollections.observableArrayList();
 
 	private final Map<String, LazyValue<PathObject, ?>> lazyValueMap = new LinkedHashMap<>();
+	private final Set<ObservableValue<?>> observableValues = new HashSet<>();
+	private final ReadOnlyLongWrapper measurementRevision = new ReadOnlyLongWrapper();
+	private final ChangeListener<Object> valueChanged = (obs, oldValue, newValue) -> measurementRevision.set(measurementRevision.get() + 1);
+	private final WeakChangeListener<Object> weakValueChanged = new WeakChangeListener<>(valueChanged);
+
+	/** Notifications for asynchronous values; changes never modify the object hierarchy. */
+	public ReadOnlyLongProperty measurementRevisionProperty() {
+		return measurementRevision.getReadOnlyProperty();
+	}
+
+	/** Release display workers when a view closes. Rebuild measurements before reusing the view. */
+	public void cancelPendingDisplayValues() {
+		lazyValueMap.values().forEach(value -> {
+			if (value instanceof ObservableLazyValue<?, ?> observable)
+				observable.cancelPending();
+		});
+	}
+
+	/**
+	 * Copy row membership, columns and value providers for a background export.
+	 * The caller must create this on the view's thread. Object references are retained;
+	 * replacing or closing the view will not change the snapshot's columns or classifier.
+	 */
+	public ObservableMeasurementTableData snapshotForExport(Collection<? extends PathObject> items) {
+		var snapshot = new ObservableMeasurementTableData();
+		snapshot.imageData = imageData;
+		snapshot.backingList.setAll(items);
+		snapshot.fullColumnList.setAll(fullColumnList);
+		snapshot.metadataColumnList.setAll(metadataColumnList);
+		snapshot.measurementColumnList.setAll(measurementColumnList);
+		snapshot.lazyValueMap.putAll(lazyValueMap);
+		return snapshot;
+	}
 
 	private PathObjectValueFactory factory;
 
@@ -161,6 +201,9 @@ public class ObservableMeasurementTableData implements PathTableData<PathObject>
 	 * @see #setImageData(ImageData, Collection)
 	 */
 	public synchronized void updateMeasurementList() {
+		observableValues.forEach(value -> value.removeListener(weakValueChanged));
+		observableValues.clear();
+		cancelPendingDisplayValues();
 		lazyValueMap.clear();
 
 		// We *might* have a factory set already (but we probably don't)
@@ -191,6 +234,9 @@ public class ObservableMeasurementTableData implements PathTableData<PathObject>
 				logger.warn("Duplicate measurement {} - entries will be dropped", name);
 			} else {
 				lazyValueMap.put(measurement.getName(), measurement);
+				if (measurement instanceof ObservableLazyValue<?, ?> observable &&
+						observableValues.add(observable.getObservable()))
+					observable.getObservable().addListener(weakValueChanged);
 				// Before v0.6.0, we used a different approach & avoided adding ROI z/t/centroid
 				// values here
 				if (measurement.isNumeric())
@@ -267,6 +313,15 @@ public class ObservableMeasurementTableData implements PathTableData<PathObject>
 	
 	@Override
 	public double getNumericValue(final PathObject pathObject, final String column) {
+		return getNumericValue(pathObject, column, false);
+	}
+
+	@Override
+	public double getNumericValueForDisplay(PathObject pathObject, String column) {
+		return getNumericValue(pathObject, column, true);
+	}
+
+	private double getNumericValue(PathObject pathObject, String column, boolean forDisplay) {
 		if (lazyValueMap.containsKey(column)) {
 			// Don't derive a measurement for a core marked as missing
 			if (pathObject instanceof TMACoreObject core) {
@@ -275,7 +330,8 @@ public class ObservableMeasurementTableData implements PathTableData<PathObject>
 			}
 			
 			LazyValue<PathObject, ?> builder = lazyValueMap.get(column);
-			var val = builder.getValue(pathObject);
+			var val = forDisplay && builder instanceof ObservableLazyValue<PathObject, ?> observable
+					? observable.getValueForDisplay(pathObject) : builder.getValue(pathObject);
 			if (val instanceof Number num)
 				return num.doubleValue();
 			else
@@ -355,6 +411,18 @@ public class ObservableMeasurementTableData implements PathTableData<PathObject>
 		if (Double.isNaN(val))
 			return "NaN";
 		return GeneralTools.formatNumber(val, 4);
+	}
+
+	/** Display values can be pending; export values retain synchronous semantics. */
+	public String getStringValueForDisplay(PathObject pathObject, String column, int decimalPlaces) {
+		var builder = lazyValueMap.get(column);
+		if (builder instanceof ObservableLazyValue<PathObject, ?> observable)
+			return observable.getStringValueForDisplay(pathObject, decimalPlaces);
+		return getStringValue(pathObject, column, decimalPlaces);
+	}
+
+	public String getStringValueForDisplay(PathObject pathObject, String column) {
+		return getStringValueForDisplay(pathObject, column, PathTableData.DEFAULT_DECIMAL_PLACES);
 	}
 
 	/**

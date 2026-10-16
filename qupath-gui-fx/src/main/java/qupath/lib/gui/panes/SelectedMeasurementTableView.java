@@ -159,7 +159,8 @@ public class SelectedMeasurementTableView implements PathObjectSelectionListener
 	}
 
 	private ObservableValue<String> tableValueColumnValueFactory(CellDataFeatures<String, String> p) {
-		return new SimpleStringProperty(getSelectedObjectMeasurementValue(p.getValue()));
+		return Bindings.createStringBinding(() -> getSelectedObjectMeasurementValue(p.getValue()),
+				tableModel.measurementRevisionProperty());
 	}
 
 
@@ -251,7 +252,7 @@ public class SelectedMeasurementTableView implements PathObjectSelectionListener
 		var selected = getSelectedObject();
 		if (selected == null)
 			return null;
-		return tableModel.getStringValue(selected, name, nDecimalPlaces);
+		return tableModel.getStringValueForDisplay(selected, name, nDecimalPlaces);
 	}
 
 	private PredicateTextField<String> createFilter() {
