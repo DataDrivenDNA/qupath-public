@@ -491,6 +491,7 @@ public class SummaryMeasurementTable {
     }
 
     private Action actionShowPlots;
+    private final BooleanProperty exportRunning = new SimpleBooleanProperty(false);
     private Action actionCopy;
     private Action actionSave;
     private Action actionThumbnails;
@@ -521,7 +522,8 @@ public class SummaryMeasurementTable {
         action.setLongText("Copy the table contents to the system clipboard");
         action.setAccelerator(new KeyCodeCombination(KeyCode.C, KeyCombination.SHORTCUT_DOWN));
         action.setGraphic(IconFactory.createNode(FontAwesome.Glyph.CLIPBOARD));
-        action.disabledProperty().bind(Bindings.isEmpty(table.getSelectionModel().getSelectedItems()));
+        action.disabledProperty().bind(exportRunning.or(
+                Bindings.isEmpty(table.getSelectionModel().getSelectedItems())));
         return action;
     }
 
@@ -530,6 +532,7 @@ public class SummaryMeasurementTable {
         action.setLongText("Save the table contents");
         action.setAccelerator(new KeyCodeCombination(KeyCode.S, KeyCombination.SHORTCUT_DOWN));
         action.setGraphic(IconFactory.createNode(FontAwesome.Glyph.SAVE));
+        action.disabledProperty().bind(exportRunning);
         return action;
     }
 
@@ -745,17 +748,17 @@ public class SummaryMeasurementTable {
     }
 
     private <T> void runTableExport(Action action, String progressText, Callable<T> work, Consumer<T> completed) {
+        if (exportRunning.get())
+            return;
         String text = action.getText();
         action.setText(progressText);
-        actionCopy.setDisabled(true);
-        actionSave.setDisabled(true);
+        exportRunning.set(true);
         var task = new Task<T>() {
             @Override protected T call() throws Exception { return work.call(); }
         };
         Runnable restore = () -> {
             action.setText(text);
-            actionCopy.setDisabled(false);
-            actionSave.setDisabled(false);
+            exportRunning.set(false);
         };
         task.setOnSucceeded(event -> {
             restore.run();
@@ -766,8 +769,14 @@ public class SummaryMeasurementTable {
             logger.error("Measurement table export failed", task.getException());
             Dialogs.showErrorMessage("Export measurements", "Unable to export the measurement table. See the log for details.");
         });
-        ThreadTools.createThreadFactory("measurement-table-export", true, Thread.NORM_PRIORITY - 1)
-                .newThread(task).start();
+        task.setOnCancelled(event -> restore.run());
+        try {
+            ThreadTools.createThreadFactory("measurement-table-export", true, Thread.NORM_PRIORITY - 1)
+                    .newThread(task).start();
+        } catch (RuntimeException | Error e) {
+            restore.run();
+            throw e;
+        }
     }
 
 
