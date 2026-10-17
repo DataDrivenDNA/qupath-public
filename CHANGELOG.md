@@ -1,5 +1,6 @@
 ## Local fixes (2026-10-17)
 
+* Avoid building whole-tissue containment indexes for cursor classification text, which only displays detections. Preserve annotation hit testing for selection.
 * Move queue input saving, fingerprints, result serialization and readback verification off the JavaFX thread. Publish prepared native files after checking for newer saves or live edits; show Preparing and recover incomplete inputs safely.
 * Record UI stalls exceeding one second with bounded JavaFX stack samples and recovery durations. Avoid geometry hashing in the recorder's annotation cache.
 * Add a persistent SYNJ1 analysis queue: outline regions, then run native threshold-220 segmentation, 0.5 µm DAB and tissue/empty measurements, verified saving and CSV export sequentially in the background, with a non-modal queue window and protection for later manual edits.

@@ -2674,7 +2674,7 @@ public class QuPathViewer implements TileListener<BufferedImage>, PathObjectHier
 		var hierarchy = getHierarchy();
 		if (hierarchy == null)
 			return "";
-		var pathObjects = PathObjectTools.getObjectsForLocation(hierarchy,
+		var pathObjects = PathObjectTools.getObjectsForLocation(hierarchy, PathDetectionObject.class,
 				x, y,
 				getZPosition(),
 				getTPosition(),
