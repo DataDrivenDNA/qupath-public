@@ -58,6 +58,7 @@ include("qupath-extension-processing")
 // Extra extensions
 include("qupath-extension-svg")
 include("qupath-extension-recorder")
+include("qupath-extension-analysis-queue")
 include("qupath-extension-script-editor")
 include("qupath-extension-openslide")
 include("qupath-extension-bioformats")
