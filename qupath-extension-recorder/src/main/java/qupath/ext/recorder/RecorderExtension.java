@@ -91,5 +91,5 @@ public final class RecorderExtension implements QuPathExtension {
     @Override public String getName() { return "Session recorder"; }
     @Override public String getDescription() { return "Local action, workflow, annotation and screenshot recording for automation."; }
     @Override public Version getQuPathVersion() { return Version.parse("0.7.0"); }
-    @Override public Version getVersion() { return Version.parse("1.0.0"); }
+    @Override public Version getVersion() { return Version.parse("1.1.0"); }
 }

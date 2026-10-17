@@ -23,6 +23,10 @@ public final class AnalysisQueue implements AutoCloseable {
     public AnalysisQueue(JobStore store, JobProcessor processor) throws IOException {
         this.store = store; this.processor = processor;
         for (var job : store.load()) {
+            if (job.state() == Job.State.PREPARING) {
+                job = job.finish(Job.State.PREPARATION_FAILED, "Application closed before input was ready. Add the image again.", job.outputPath());
+                store.save(job);
+            }
             if (job.state() == Job.State.PROCESSING) {
                 job = job.finish(Job.State.INTERRUPTED, "Application closed during processing. Retry to use the saved input.", job.outputPath());
                 store.save(job);
@@ -43,9 +47,24 @@ public final class AnalysisQueue implements AutoCloseable {
         store.save(job); jobs.add(job); start();
     }
     public synchronized void start() {
-        if (!closed && !paused && !scheduled && jobs.stream().anyMatch(j -> j.state() == Job.State.WAITING)) {
+        if (!closed && !paused && !scheduled && nextWaiting() != null) {
             scheduled = true; worker.submit(this::drain);
         }
+    }
+    private Job nextWaiting() {
+        var first = jobs.stream().filter(Job::active).findFirst().orElse(null);
+        return first != null && first.state() == Job.State.WAITING ? first : null;
+    }
+    public synchronized void inputReady(String id) throws IOException {
+        if (closed) return; // A durable Preparing row is recovered on the next launch.
+        if (find(id).state() != Job.State.PREPARING) throw new IllegalStateException("Input is not preparing");
+        try { replace(find(id).retry()); start(); }
+        catch (IOException error) { pauseForStorageFailure(error); throw error; }
+    }
+    public synchronized void preparationFailed(String id, String message) throws IOException {
+        if (closed) return;
+        try { replace(find(id).finish(Job.State.PREPARATION_FAILED, message + " Add the image again.", null)); start(); }
+        catch (IOException error) { pauseForStorageFailure(error); throw error; }
     }
     public synchronized void setPaused(boolean value) { paused = value; if (!value) start(); }
     public synchronized void cancelWaiting(String id) throws IOException {
@@ -72,7 +91,7 @@ public final class AnalysisQueue implements AutoCloseable {
                 Job job;
                 synchronized (this) {
                     if (closed || paused) return;
-                    job = jobs.stream().filter(j -> j.state() == Job.State.WAITING).findFirst().orElse(null);
+                    job = nextWaiting();
                     if (job == null) return;
                     job = job.processing("Opening saved input"); replace(job);
                 }
@@ -94,7 +113,7 @@ public final class AnalysisQueue implements AutoCloseable {
                 }
             }
         } catch (IOException error) {
-            synchronized (this) { paused = true; storageError = "Queue storage failed: " + error.getMessage(); }
+            synchronized (this) { pauseForStorageFailure(error); }
         } finally {
             synchronized (this) {
                 scheduled = false;
@@ -106,6 +125,9 @@ public final class AnalysisQueue implements AutoCloseable {
     private synchronized void updatePhase(String id, String phase) {
         try { replace(find(id).processing(phase)); }
         catch (IOException error) { throw new java.io.UncheckedIOException(error); }
+    }
+    private void pauseForStorageFailure(IOException error) {
+        paused = true; storageError = "Queue storage failed: " + error.getMessage();
     }
     @Override public synchronized void close() {
         closed = true; worker.shutdown(); // Finish the current native call; never interrupt another slide's editor.

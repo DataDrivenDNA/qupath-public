@@ -748,6 +748,34 @@ class DefaultProject implements Project<BufferedImage> {
 
 		}
 
+		@Override
+		public PreparedImageDataSave prepareImageDataSave(ImageData<BufferedImage> imageData) throws IOException {
+			getEntryPath(true);
+			imageData.setProperty(IMAGE_ID, getFullProjectEntryID());
+			var builder = imageData.getServerBuilder();
+			var prepared = new PreparedImageDataSave(this,
+					List.of(getImageDataPath(), getDataSummaryPath(), getServerPath()), () -> {
+						this.serverBuilder = builder;
+						imageData.setLastSavedPath(getImageDataPath().toString(), true);
+					});
+			try {
+				try (var stream = Files.newOutputStream(prepared.stagedPath())) {
+					PathIO.writeImageData(stream, imageData);
+				}
+				try (var out = Files.newBufferedWriter(prepared.staged(1), StandardCharsets.UTF_8)) {
+					GsonTools.getInstance().toJson(new ImageDataSummary(imageData,
+							Files.getLastModifiedTime(prepared.stagedPath()).toMillis()), out);
+				}
+				try (var out = Files.newBufferedWriter(prepared.staged(2), StandardCharsets.UTF_8)) {
+					GsonTools.getInstance(true).toJson(builder, ServerBuilder.class, out);
+				}
+				return prepared;
+			} catch (IOException | RuntimeException error) {
+				try { prepared.close(); } catch (IOException cleanup) { error.addSuppressed(cleanup); }
+				throw error;
+			}
+		}
+
 		private void writeServerBuilder() throws IOException {
 			// Write the server - it isn't used, but it may enable us to rebuild the server from the data directory
 			// if the project is lost.

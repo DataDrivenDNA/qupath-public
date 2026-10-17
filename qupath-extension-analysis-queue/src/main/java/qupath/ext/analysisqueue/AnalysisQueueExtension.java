@@ -45,6 +45,6 @@ public final class AnalysisQueueExtension implements QuPathExtension {
     public QueueWindow window() { return window; }
     @Override public String getName() { return "Analysis queue"; }
     @Override public String getDescription() { return "Outline a region, then queue native SYNJ1 segmentation, measurements, save and export."; }
-    @Override public Version getVersion() { return Version.parse("1.0.0"); }
+    @Override public Version getVersion() { return Version.parse("1.1.0"); }
     @Override public Version getQuPathVersion() { return Version.parse("0.7.0"); }
 }

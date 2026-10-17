@@ -23,6 +23,24 @@ import static org.junit.jupiter.api.Assertions.*;
 class TestImageRecording {
     @TempDir Path temporary;
 
+    @Test void geometryCacheNeverHashesComplexRoisOnTheCallerThread() throws Exception {
+        var delegate = ROIs.createRectangleROI(1, 2, 8, 9);
+        var roi = (qupath.lib.roi.interfaces.ROI)java.lang.reflect.Proxy.newProxyInstance(getClass().getClassLoader(),
+                new Class<?>[]{qupath.lib.roi.interfaces.ROI.class}, (proxy, method, args) -> {
+                    if (method.getName().equals("hashCode") || method.getName().equals("equals"))
+                        throw new AssertionError("Recording must use ROI identity, not geometry hashing");
+                    return method.invoke(delegate, args);
+                });
+        try (var server = new WrappedBufferedImageServer("identity", new BufferedImage(32, 32, BufferedImage.TYPE_INT_RGB))) {
+            var data = new ImageData<>(server); data.getHierarchy().addObject(PathObjects.createAnnotationObject(roi));
+            var writer = new RecordWriter(temporary, error -> fail(error));
+            try (var recording = new ImageRecording(data, writer, "image-1", () -> {})) { recording.snapshotAnnotations(); }
+            writer.close(); assertTrue(writer.awaitClosed(5000));
+            assertEquals(0, writer.assetErrors()); assertEquals(0, writer.observerErrors());
+            try (var files = Files.list(temporary.resolve("geometry"))) { assertEquals(1, files.count()); }
+        }
+    }
+
     @Test void recordsGeometryEditsWorkflowSelectionAndRemovalWithoutChangingData() throws Exception {
         try (var server = new WrappedBufferedImageServer("recorder-test", new BufferedImage(32, 32, BufferedImage.TYPE_INT_RGB))) {
             var data = new ImageData<>(server);

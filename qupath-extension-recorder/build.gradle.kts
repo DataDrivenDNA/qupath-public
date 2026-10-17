@@ -11,5 +11,5 @@ base {
 }
 
 tasks.jar {
-    manifest.attributes("Implementation-Version" to "1.0.0")
+    manifest.attributes("Implementation-Version" to "1.1.0")
 }

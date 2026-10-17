@@ -8,4 +8,4 @@ base {
     archivesName = "qupath-extension-analysis-queue"
     description = "Background analysis queue for reviewed QuPath regions."
 }
-tasks.jar { manifest.attributes("Implementation-Version" to "1.0.0") }
+tasks.jar { manifest.attributes("Implementation-Version" to "1.1.0") }

@@ -46,6 +46,7 @@ final class RecordingSession implements AutoCloseable {
     private final AppenderBase<ILoggingEvent> appender;
     private final ch.qos.logback.classic.Logger rootLogger;
     private final Thread shutdown;
+    private FxResponsivenessMonitor responsiveness;
     private int imageNumber;
     private int frameNumber;
     private boolean closed;
@@ -55,7 +56,7 @@ final class RecordingSession implements AutoCloseable {
         writer = new RecordWriter(path, failed);
         try {
         writer.event("session.start", Map.of("pid", ProcessHandle.current().pid(), "qupathVersion", QuPathGUI.getVersion().toString(),
-                "extensionVersion", "1.0.0", "formatLocale", Locale.getDefault(Locale.Category.FORMAT).toLanguageTag(),
+                "extensionVersion", "1.1.0", "formatLocale", Locale.getDefault(Locale.Category.FORMAT).toLanguageTag(),
                 "screenshots", "QuPath JavaFX scenes after activity, at most once per 2 seconds",
                 "scope", "UI actions, committed fields, workflow, annotations, selections, view, INFO/WARN/ERROR logs"));
         ui = new UiRecording(writer, () -> dirty.set(true));
@@ -91,6 +92,7 @@ final class RecordingSession implements AutoCloseable {
             if (dirty.getAndSet(false)) captureFrames();
         })));
         timer.setCycleCount(Timeline.INDEFINITE); timer.play();
+        responsiveness = FxResponsivenessMonitor.start(writer);
         shutdown = new Thread(() -> {
             writer.event("session.shutdown", Map.of("time", Instant.now().toString()));
             writer.close();
@@ -190,6 +192,7 @@ final class RecordingSession implements AutoCloseable {
     @Override public void close() {
         if (closed) return;
         closed = true;
+        if (responsiveness != null) responsiveness.close();
         if (timer != null) timer.stop();
         if (rootLogger != null) { rootLogger.detachAppender(appender); appender.stop(); }
         if (viewerChanges != null) gui.getAllViewers().removeListener(viewerChanges);

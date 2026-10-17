@@ -13,6 +13,10 @@ public final class ResultMerger {
     public static void merge(ImageData<BufferedImage> target, ImageData<BufferedImage> result, AnalysisInput input) {
         if (!SourceSignature.matches(target, input))
             throw new IllegalStateException("Queued regions or image settings have changed.");
+        applyVerified(target, result, input);
+    }
+    /** Apply after a worker fingerprint check and an FX snapshot-stamp check. */
+    public static void applyVerified(ImageData<BufferedImage> target, ImageData<BufferedImage> result, AnalysisInput input) {
         var destinations = SourceSignature.roots(target, input.regionIds());
         var sources = SourceSignature.roots(result, input.regionIds());
         var selection = target.getHierarchy().getSelectionModel();

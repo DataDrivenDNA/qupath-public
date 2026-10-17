@@ -84,9 +84,10 @@ public final class QueueWindow {
             if (selected != null) jobs.stream().filter(j -> j.id().equals(selected.id())).findFirst().ifPresent(table.getSelectionModel()::select);
         }
         long waiting = jobs.stream().filter(j -> j.state() == Job.State.WAITING).count();
+        long preparing = jobs.stream().filter(j -> j.state() == Job.State.PREPARING).count();
         long running = jobs.stream().filter(j -> j.state() == Job.State.PROCESSING).count();
         long done = jobs.stream().filter(j -> j.state() == Job.State.COMPLETED).count();
-        summary.setText(controller.error().isBlank() ? waiting + " waiting   •   " + running + " processing   •   " + done + " completed" : controller.error());
+        summary.setText(controller.error().isBlank() ? preparing + " preparing   •   " + waiting + " waiting   •   " + running + " processing   •   " + done + " completed" : controller.error());
         pause.setText(controller.paused() ? "Resume queue" : "Pause after current image");
         updateDetail();
     }

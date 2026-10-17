@@ -8,7 +8,8 @@ worker performs the analysis.
 2. Choose **Extensions → Analysis queue → Add current image to queue**.
 3. The queue window opens. Move to another slide and continue outlining. Use the
    window's **Add current image to queue** button for the next image.
-4. A **Completed** row means the project result was saved and read back successfully,
+4. A **Preparing** row saves and verifies the input in the background. A **Completed**
+   row means the verified native result was published to the project,
    and its CSV was exported. Select the row and click **Open results folder**.
 
 With no selection, all outer area annotations are included. Selecting tissue or
@@ -18,14 +19,14 @@ waiting or processing is rejected.
 
 ## Automatic steps
 
-- Save the current image and freeze its annotations, settings, and classifier.
+- Copy the current annotations quickly, then save and verify that snapshot in the background.
 - For regions without existing tissue/empty children, create those annotations
   using the project's `threshhold 220 very high synj1` classifier: **Red threshold
   220**, minimum object area **0**, minimum hole area **0**.
 - Measure **DAB mean and standard deviation at 0.5 µm/pixel** on tissue annotations.
 - Add permanent tissue/empty percentages and areas to the queued annotation branches.
-- Verify the native result, export full-precision CSV, save the project result,
-  then reopen it and verify the stored annotations and measurements.
+- Verify the native result, export full-precision CSV, prepare and reopen the project
+  save in the background, then atomically publish those verified files.
 
 The classifier retains its saved resolution (the current project's classifier is
 0.4544938075 µm/pixel). This is separate from the **0.5 µm DAB measurement resolution**.
@@ -42,6 +43,11 @@ be retried from their saved inputs. Keep QuPath open while it processes.
 The worker owns a separate image server and annotation hierarchy. It never uses
 the editor's current selection for its calculations. Results replace only the
 queued branches after their input is checked. Other unsaved branches survive.
+
+Preparing inputs reserves their place in the queue. If you edit that image during
+preparation, **Could not queue** asks you to add the latest outline again. Moving to
+another slide is supported, including QuPath's automatic save of the previous one.
+After a restart, an unfinished Preparing row also asks you to add the image again.
 
 If the queued image is saved again, its selected region changes, or its image
 settings change, the row becomes **Needs review** and the computed result is kept
@@ -65,6 +71,8 @@ also requires review.
 ## Build and checks
 
 Build with `./gradlew :qupath-extension-analysis-queue:test :qupath-extension-analysis-queue:jar`.
-Install the module JAR in QuPath's user `extensions` folder. Tests use temporary
+Version 1.1 requires this build's patched `qupath-core` JAR for prepared native saves,
+as well as the extension JAR in QuPath's user `extensions` folder. Restart QuPath
+after updating both. Tests use temporary
 projects and native image readers, classifiers, measurements, save/readback and
 CSV export. See [native API notes](../docs/api/qupath/analysis-queue.md).

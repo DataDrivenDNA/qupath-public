@@ -222,6 +222,18 @@ public interface ProjectImageEntry<T> extends UriResource, MinimalMetadataStore 
 	 * @throws IOException 
 	 */
 	void saveImageData(ImageData<T> imageData) throws IOException;
+
+	/**
+	 * Prepare a native save without changing the entry's saved files. The supplied
+	 * data must be independently owned by the calling worker, not a live viewer.
+	 * Verify the staged file, guard live edits, then commit and close the result.
+	 * @param imageData independent snapshot to save
+	 * @return a checked, staged save
+	 * @throws IOException if preparation fails
+	 */
+	default PreparedImageDataSave prepareImageDataSave(ImageData<T> imageData) throws IOException {
+		throw new UnsupportedOperationException("This project does not support prepared image saves");
+	}
 	
 	/**
 	 * Read the {@link PathObjectHierarchy} for this entry, or return an empty hierarchy if none is available.

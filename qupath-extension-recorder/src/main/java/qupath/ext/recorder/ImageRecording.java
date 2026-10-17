@@ -21,7 +21,9 @@ final class ImageRecording implements AutoCloseable {
     private final RecordWriter writer;
     private final String imageId;
     private final Runnable changed;
-    private final Map<ROI, String> geometries = new WeakHashMap<>();
+    // ROI.hashCode may traverse millions of coordinates. Native ROIs are immutable;
+    // reuse by identity and release replaced ROIs after each snapshot instead.
+    private final Map<ROI, String> geometries = new IdentityHashMap<>();
     private final Map<UUID, Map<String, Object>> previous = new HashMap<>();
     private int geometryNumber;
     private String lastSavedPath;
@@ -105,7 +107,9 @@ final class ImageRecording implements AutoCloseable {
 
     synchronized void snapshotAnnotations() {
         var current = new HashSet<UUID>();
+        var currentRois = Collections.newSetFromMap(new IdentityHashMap<ROI, Boolean>());
         for (var object : data.getHierarchy().getAnnotationObjects()) {
+            if (object.getROI() != null) currentRois.add(object.getROI());
             var state = state(object);
             current.add(object.getID());
             if (!state.equals(previous.get(object.getID()))) {
@@ -113,6 +117,7 @@ final class ImageRecording implements AutoCloseable {
                 previous.put(object.getID(), state);
             }
         }
+        geometries.keySet().removeIf(roi -> !currentRois.contains(roi));
         for (var id : new HashSet<>(previous.keySet())) {
             if (!current.contains(id)) {
                 writer.event("annotation.removed", Map.of("image", imageId, "id", id.toString()));
@@ -156,6 +161,7 @@ final class ImageRecording implements AutoCloseable {
         data.getHierarchy().getSelectionModel().removePathObjectSelectionListener(selectionListener);
         data.getHistoryWorkflow().removeWorkflowListener(workflowListener);
         data.removePropertyChangeListener(propertyListener);
+        geometries.clear();
         writer.event("image.detach", Map.of("image", imageId));
     }
 }

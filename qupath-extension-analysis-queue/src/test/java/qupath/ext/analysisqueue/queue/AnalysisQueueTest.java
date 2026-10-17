@@ -71,4 +71,28 @@ class AnalysisQueueTest {
             assertEquals(Job.State.COMPLETED, queue.snapshot().getFirst().state());
         }
     }
+    @Test void preparingJobsReserveTheirPositionAndFailedPreparationReleasesIt() throws Exception {
+        var order = new CopyOnWriteArrayList<String>();
+        try (var queue = new AnalysisQueue(new DiskJobStore(root), (j, p, c) -> {
+            order.add(j.imageKey()); return new JobProcessor.Outcome(Job.State.COMPLETED, "saved", p.toString());
+        })) {
+            var first = Job.preparing("first", "First"); var second = Job.preparing("second", "Second");
+            queue.enqueue(first); queue.enqueue(second); queue.inputReady(second.id());
+            assertTrue(queue.containsActive("first")); assertTrue(order.isEmpty());
+            assertThrows(IllegalArgumentException.class, () -> queue.enqueue(Job.preparing("first", "Duplicate")));
+            queue.preparationFailed(first.id(), "Input changed");
+            await(() -> queue.snapshot().get(1).state() == Job.State.COMPLETED);
+            assertEquals(List.of("second"), order);
+            assertEquals(Job.State.PREPARATION_FAILED, queue.snapshot().getFirst().state());
+            assertThrows(IllegalStateException.class, () -> queue.retry(first.id()));
+        }
+    }
+    @Test void restartNeverDispatchesAnIncompleteSnapshot() throws Exception {
+        try (var store = new DiskJobStore(root)) { store.save(Job.preparing("partial", "Partial")); }
+        try (var queue = new AnalysisQueue(new DiskJobStore(root), (j, p, c) -> { throw new AssertionError("Incomplete input dispatched"); })) {
+            queue.start();
+            assertEquals(Job.State.PREPARATION_FAILED, queue.snapshot().getFirst().state());
+            assertFalse(queue.containsActive("partial"));
+        }
+    }
 }

@@ -8,6 +8,7 @@ import java.util.UUID;
 public record Job(String id, String imageKey, String imageName, State state, String phase,
                   String message, String createdAt, String startedAt, String finishedAt, String outputPath) {
     public enum State {
+        PREPARING("Preparing"), PREPARATION_FAILED("Could not queue"),
         WAITING("Waiting"), PROCESSING("Processing"), COMPLETED("Completed"),
         NEEDS_REVIEW("Needs review"), FAILED("Failed"), INTERRUPTED("Interrupted"), CANCELLED("Cancelled");
         private final String label;
@@ -18,7 +19,11 @@ public record Job(String id, String imageKey, String imageName, State state, Str
         return new Job(UUID.randomUUID().toString(), imageKey, imageName, State.WAITING,
                 "Waiting", "", Instant.now().toString(), null, null, null);
     }
-    public boolean active() { return state == State.WAITING || state == State.PROCESSING; }
+    public static Job preparing(String imageKey, String imageName) {
+        var job = waiting(imageKey, imageName);
+        return new Job(job.id, imageKey, imageName, State.PREPARING, "Saving and verifying input", "", job.createdAt, null, null, null);
+    }
+    public boolean active() { return state == State.PREPARING || state == State.WAITING || state == State.PROCESSING; }
     public Job processing(String step) {
         return new Job(id, imageKey, imageName, State.PROCESSING, step, "", createdAt,
                 startedAt == null ? Instant.now().toString() : startedAt, null, outputPath);

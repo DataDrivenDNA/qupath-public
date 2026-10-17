@@ -68,9 +68,36 @@ rejection, cancellation, interrupted-job recovery, exclusive ownership, and
 cleanup after durable completion.
 
 Whole-slide processing time depends strongly on ROI geometry and image size.
-Saving a very large annotation hierarchy can briefly occupy the FX thread;
-segmentation and measurements run in the background. Native-input desktop
-automation is not required for installation or app-scoped acceptance.
+The 1.1 update moves serialization, checksums and readback to workers. FX captures
+mutable object state while sharing native immutable ROI references, and compares
+an identity-based snapshot stamp before committing. It never hashes ROI geometry
+or opens a lazy image server during input capture. Native hierarchy listeners
+(including undo history) still execute during the final GUI update.
+
+`ProjectImageEntry.prepareImageDataSave` is a local core API. DefaultProject uses
+the existing PathIO, ImageDataSummary and server-builder formats. Preparation
+copies rollback files and writes new data/summary/server files without holding
+the entry monitor. `PreparedImageDataSave.commit` checks file versions and uses
+atomic replacement, keeping the authoritative data file continuously present.
+I/O failure restores installed files; failed recovery retains the staging directory.
+Closing the prepared save on the worker removes its staging/rollback files.
+A process crash can leave `.prepared-save-*` directories; these must be inspected
+before cleanup. The data file remains a complete old or new native serialization.
+
+The queue treats PREPARING as active for FIFO order and duplicate protection.
+It dispatches only after a durable inputReady transition. A crash during capture
+becomes PREPARATION_FAILED, requiring a fresh Add rather than retrying partial data.
+The input preparation executor is independent of the analysis worker.
+
+Full-size verification on 9272 uses its entire 245,892,976-byte annotation file
+in an isolated project, a real JavaFX event loop, an offscreen QuPathViewer with
+native undo, and the recorder. The initial measured FX capture was 6.2 ms and
+publication 858 ms; background capture/save took 8.0 s and publication preparation,
+verification and commit together took 11.3 s. The complete check took 34.6 s,
+including source loading, setup, final readback and original-file verification.
+Three annotations and DAB mean 0.522597343354813 / SD 0.16032282189545555 survived.
+This exercises full-size save/publication, not a rerun of whole-slide segmentation.
+No desktop input or foreground activation was used.
 
 ## Installed acceptance on 2026-10-17
 

@@ -125,4 +125,89 @@ class NativeWorkflowTest {
             }
         }
     }
+    @Test void snapshotOwnsMutableStateAndDetectsUnannouncedEditsWithoutTraversingGeometry() throws Exception {
+        try (var f = new NativeFixture(root.resolve("snapshot"), 80); var snapshot = ImageSnapshot.capture(f.data)) {
+            var copy = SourceSignature.roots(snapshot.data(), f.ids()).getFirst();
+            assertNotSame(f.region, copy); assertSame(f.region.getROI(), copy.getROI());
+            assertTrue(snapshot.unchanged());
+            f.region.getMeasurementList().put("manual", 42);
+            assertFalse(snapshot.unchanged()); assertTrue(Double.isNaN(copy.getMeasurementList().get("manual")));
+            f.region.getMeasurementList().remove("manual"); assertTrue(snapshot.unchanged());
+            f.region.setName("New name"); assertFalse(snapshot.unchanged()); assertEquals("Outer region", copy.getName());
+        }
+    }
+    @Test void editsDuringPreparationKeepBothLiveAndPreviouslySavedWork() throws Exception {
+        try (var f = new NativeFixture(root.resolve("capture-race"), 80)) {
+            String before = JsonFiles.sha256(Path.of(f.data.getLastSavedPath()));
+            var capture = new InputCapture();
+            try (var frozen = capture.freeze(f.project, f.data, List.of(f.region), Job.preparing("race", "Race"), root.resolve("input"))) {
+                f.region.setName("User's new outline name");
+                assertThrows(IllegalStateException.class, () -> capture.complete(frozen, FxExecutor.direct(), () -> true));
+            }
+            assertEquals("User's new outline name", f.region.getName());
+            assertEquals(before, JsonFiles.sha256(Path.of(f.data.getLastSavedPath())));
+        }
+    }
+    @Test void nativeAutosaveDuringPreparationCanBeAdoptedWhenOutlineMatches() throws Exception {
+        try (var f = new NativeFixture(root.resolve("autosave"), 80)) {
+            var capture = new InputCapture(); var directory = root.resolve("input");
+            try (var frozen = capture.freeze(f.project, f.data, List.of(f.region), Job.preparing("auto", "Auto"), directory)) {
+                var saveBeforeCommit = new FxExecutor() {
+                    public <T> T call(java.util.concurrent.Callable<T> operation) throws Exception {
+                        f.entry.saveImageData(f.data); return operation.call();
+                    }
+                };
+                capture.complete(frozen, saveBeforeCommit, () -> true);
+            }
+            var input = JsonFiles.read(directory.resolve("input.json"), AnalysisInput.class);
+            assertEquals(input.savedSha256(), JsonFiles.sha256(Path.of(f.data.getLastSavedPath())));
+            assertTrue(SourceSignature.matches(f.data, input));
+        }
+    }
+    @Test void publishingPreservesUnrelatedLiveWorkAndUpdatesTheOpenViewer() throws Exception {
+        try (var f = new NativeFixture(root.resolve("live-publish"), 80)) {
+            var directory = root.resolve("input");
+            new InputCapture().capture(f.project, f.data, List.of(f.region), Job.waiting("live", "Live"), directory);
+            var input = JsonFiles.read(directory.resolve("input.json"), AnalysisInput.class);
+            try (var result = PathIO.<BufferedImage>readImageData(directory.resolve("input.qpdata"))) {
+                new Synj1Analysis().run(result, f.ids(), PixelClassifiers.readClassifier(f.classifier()), p -> {});
+                var other = PathObjects.createAnnotationObject(ROIs.createRectangleROI(220, 0, 10, 10, ImagePlane.getDefaultPlane()));
+                other.setName("Unrelated manual work"); f.data.getHierarchy().addObject(other);
+                f.data.getHierarchy().getSelectionModel().setSelectedObject(other);
+                var editor = new EditorAccess() {
+                    public qupath.lib.projects.Project<BufferedImage> project() { return f.project; }
+                    public List<ImageData<BufferedImage>> openImages(AnalysisInput i) { return List.of(f.data); }
+                };
+                assertNull(new NativeResultPublisher(FxExecutor.direct(), editor).publish(input, result));
+                assertEquals(2, f.region.nChildObjects()); assertFalse(f.data.isChanged());
+                assertSame(other, f.data.getHierarchy().getSelectionModel().getSelectedObject());
+                try (var saved = f.entry.readImageData()) {
+                    assertTrue(saved.getHierarchy().getAnnotationObjects().stream().anyMatch(p -> p.getID().equals(other.getID())));
+                    assertEquals(2, SourceSignature.roots(saved, f.ids()).getFirst().nChildObjects());
+                }
+            }
+        }
+    }
+    @Test void publishingRejectsAnEditMadeWhileTheSaveIsPrepared() throws Exception {
+        try (var f = new NativeFixture(root.resolve("publish-race"), 80)) {
+            var directory = root.resolve("input");
+            new InputCapture().capture(f.project, f.data, List.of(f.region), Job.waiting("live", "Live"), directory);
+            var input = JsonFiles.read(directory.resolve("input.json"), AnalysisInput.class);
+            var hash = JsonFiles.sha256(Path.of(input.savedPath()));
+            try (var result = PathIO.<BufferedImage>readImageData(directory.resolve("input.qpdata"))) {
+                new Synj1Analysis().run(result, f.ids(), PixelClassifiers.readClassifier(f.classifier()), p -> {});
+                var editor = new EditorAccess() {
+                    int reads;
+                    public qupath.lib.projects.Project<BufferedImage> project() { return f.project; }
+                    public List<ImageData<BufferedImage>> openImages(AnalysisInput i) {
+                        if (++reads == 2) f.region.setName("User edited during publication");
+                        return List.of(f.data);
+                    }
+                };
+                assertNotNull(new NativeResultPublisher(FxExecutor.direct(), editor).publish(input, result));
+                assertEquals("User edited during publication", f.region.getName());
+                assertEquals(0, f.region.nChildObjects()); assertEquals(hash, JsonFiles.sha256(Path.of(input.savedPath())));
+            }
+        }
+    }
 }
