@@ -1,4 +1,6 @@
-## Local fixes (2026-10-17)
+## Local fixes (2026-10-18)
+
+* Preserve native geometry coordinates when reopening saved annotations; prevent queue verification failures caused by 0.01-pixel grid snapping.
 
 * Avoid building whole-tissue containment indexes for cursor classification text, which only displays detections. Preserve annotation hit testing for selection.
 * Move queue input saving, fingerprints, result serialization and readback verification off the JavaFX thread. Publish prepared native files after checking for newer saves or live edits; show Preparing and recover incomplete inputs safely.

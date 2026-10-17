@@ -32,7 +32,6 @@ import org.locationtech.jts.geom.Polygonal;
 import org.locationtech.jts.geom.Puntal;
 import org.locationtech.jts.geom.util.AffineTransformation;
 import org.locationtech.jts.io.ParseException;
-import org.locationtech.jts.io.WKBReader;
 import org.locationtech.jts.io.WKBWriter;
 import org.locationtech.jts.operation.predicate.RectangleIntersects;
 import org.locationtech.jts.operation.valid.IsValidOp;
@@ -436,9 +435,9 @@ public class GeometryROI extends AbstractPathROI implements Serializable {
 		}
 
 		private Object readResolve() throws ParseException {
-			// Assume we can use the default factory, since we wrote the ROI -
-			// although if we were decreasing precision this could be problematic
-			var geometry = new WKBReader(GeometryTools.getDefaultFactory()).read(wkb);
+			// Clipping and transforms may produce coordinates between precision-grid lines.
+			// Preserve the stored boundary and the cached stats derived from it.
+			var geometry = GeometryWKB.read(wkb);
 			GeometryROI roi = new GeometryROI(geometry, ImagePlane.getPlaneWithChannel(c, z, t));
 			roi.stats = this.stats;
 			return roi;
