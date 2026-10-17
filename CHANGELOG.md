@@ -1,5 +1,6 @@
 ## Local fixes (2026-10-17)
 
+* Complete the SYNJ1 workflow with persistent tissue/empty classifier percentages and areas, full annotation exports, and a companion command that preserves existing DAB measurements.
 * Add a reusable SYNJ1 project script to measure existing tissue annotations at 0.5 µm, save with native readback verification, and export full-precision DAB results.
 * Add an optional Session Recorder extension with automatic startup, local workflow/action logs, annotation geometry and measurement history, and activity-based QuPath snapshots. Include start/stop controls and explicit capture/storage failure records.
 * Notify a stable snapshot of hierarchy listeners, allowing live measurement refreshes to register or remove listeners without interrupting annotation creation or unlocking.

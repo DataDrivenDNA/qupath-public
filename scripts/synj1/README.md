@@ -1,36 +1,58 @@
-# Native tissue DAB measurements
+# Complete native SYNJ1 annotation measurements
 
-Copy `Measure tissue DAB at 0.5 um.groovy` into a QuPath project's `scripts` folder.
-Open an annotated image, then use **Automate > Project scripts** to open this
-script and **Run > Run** in the script editor.
+Copy both Groovy scripts in this folder into the QuPath project's `scripts`
+folder. Open a reviewed image, then choose the command under **Automate > Project
+scripts** and use **Run > Run** in the script editor.
 
-The command measures every existing annotation classified exactly `tissue` on the
-current image. It requires Brightfield H-DAB, H-DAB stains, and micron calibration.
-It preserves the current stain settings and uses QuPath's native intensity plugin
-with an explicit numeric pixel size of 0.5 micrometres, ROI region, DAB channel,
-mean, and standard deviation. Two worker threads keep the analysis bounded.
+- **Measure tissue DAB at 0.5 um** measures DAB mean and standard deviation in
+  every annotation classified exactly `tissue`, then adds permanent tissue/empty
+  percentages and pixel areas to every non-empty area annotation, including the
+  outer region and empty annotation.
+- **Add tissue and empty measurements** runs the same save/export workflow while
+  preserving all existing DAB measurements. Use it to complete an earlier analysis
+  without recalculating DAB. Both scripts must be installed together.
 
-It saves the image through the native project API, reads the saved data back,
-checks annotation identity/geometry/properties and measurements, then exports a
-full-precision UTF-8 CSV and JSON run record under
-`Results/DAB 0.5 um/<timestamp-entry-id>/`. CSV rows are tissue annotations only;
-area is the vector ROI area converted using the slide's pixel calibration.
+The command requires a project image with Brightfield H-DAB, H-DAB stains, micron
+calibration, and reviewed tissue annotations. It uses the project's saved classifier
+`threshhold 220 very high synj1`. That classifier's current resolution is approximately
+0.454494 µm; this is separate from the **0.5 µm DAB intensity resolution**. The saved
+classifier supplies its own channel, threshold, classes and resolution.
 
-Repeated runs recalculate the same 0.50 micrometre measurement fields and create a
-new result folder. Existing measurements at other resolutions remain. No classifier
-is rerun and no annotation is created or removed. This native-ROI measurement is
-separate from the existing SYNJ1 tiled method, which samples a classifier mask.
+Permanent fields have the prefix `Tissue/empty:` and include `tissue %`, `tissue
+area µm^2`, `empty %`, and `empty area µm^2`. They survive image reopening and do not
+require the classifier window to stay open. Percentages on the outer region describe
+the full outlined region. Tissue and empty children also receive their own values.
+Geometric ROI area and classifier pixel-count area are different measurements; both
+are exported with distinct column names.
 
-Run one image at a time. Leave the image, stain settings, and annotations unchanged
-while measurement runs. The command checks for changes before saving. It does not
-lock the application against concurrent edits. A failed/cancelled measurement may
-leave partial measurement updates in memory; it is not saved by the command unless
-the run reaches the explicit save step. `run.json` reports which phase succeeded;
-`COMPLETED` requires saved-data verification and a successful CSV write.
+The classifier measures temporary annotation objects with the original ROIs, using
+QuPath's native pixel measurement manager, with preferred parallelism set to four.
+For three annotations this uses two annotation workers and two tile workers.
+Large, detailed outlines can take several minutes each. It checks finite
+values, percentages totaling 100%, and agreement between areas and percentages before
+copying results to the original annotations. Original geometry, classes, names,
+parents and lock states are checked. Existing DAB fields at other resolutions remain.
+The command does not create replacement annotations or rerun segmentation.
+The installed native measurement code rounds classifier values to float precision;
+percentage checks allow approximately 0.000031 percentage points of rounding.
+The script preserves the native values without normalizing them.
 
-Project/API details: QuPath's `IntensityFeaturesPlugin.getParentObjects` uses the
-selection model, so the script explicitly selects its tissue targets. Native
-`ProjectImageEntry.saveImageData` manages a temporary backup during the write;
-that backup is not a permanent archive. `PathIO.readImageData(path, server)` is
-used for readback without opening another slide server. The existing shared server
-must not be closed by the readback code.
+The image is saved through QuPath's native project API and read back. All annotation
+identities, geometry/properties, and measurements must match. A full-precision UTF-8
+CSV of **all annotations** and a JSON run record are written to
+`Results/Complete annotation measurements/<timestamp-entry-id>/`. The CSV includes
+object metadata, centroids, geometric area/perimeter, stored DAB measurements and the
+four permanent classifier fields. Blank cells mean a measurement is not applicable
+or absent, for example DAB intensity on the outer region. Temporary `(Live)` columns
+are excluded. The JSON records classifier name/hash/resolution and whether DAB was
+recomputed. `COMPLETED` requires native saved-data verification and successful export.
+
+Run one image at a time and leave the image, stains and annotations unchanged while
+it runs. The script checks for concurrent edits before saving but does not lock the
+application. Repeating a command replaces its own measurement fields and creates a
+new output folder. A failed DAB calculation can leave partial DAB updates in memory;
+classifier values are staged until all objects pass validation. Native saving manages
+a temporary backup, not an archival history.
+
+The separate SYNJ1 tiled workflow remains available. This command measures the
+existing reviewed ROIs with native QuPath APIs, rather than replacing that workflow.
