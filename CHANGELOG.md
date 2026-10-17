@@ -1,5 +1,6 @@
 ## Local fixes (2026-10-17)
 
+* Add an optional Session Recorder extension with automatic startup, local workflow/action logs, annotation geometry and measurement history, and activity-based QuPath snapshots. Include start/stop controls and explicit capture/storage failure records.
 * Notify a stable snapshot of hierarchy listeners, allowing live measurement refreshes to register or remove listeners without interrupting annotation creation or unlocking.
 * Add regression coverage for listener changes, real measurement-table refreshes during annotation workflows, annotation save/reload, and localized half-micron intensity inputs reaching the actual image reads.
 
