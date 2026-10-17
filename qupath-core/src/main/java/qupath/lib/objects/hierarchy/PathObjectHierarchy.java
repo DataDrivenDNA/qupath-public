@@ -1141,7 +1141,9 @@ public final class PathObjectHierarchy implements Serializable {
 				}
 			}
 
-			for (PathObjectHierarchyListener listener : listeners) {
+			// Callbacks may register or remove listeners while handling this event.
+			// Keep the current recipients stable; changes apply to the next event.
+			for (PathObjectHierarchyListener listener : new ArrayList<>(listeners)) {
 				listener.hierarchyChanged(event);
 			}
 		}

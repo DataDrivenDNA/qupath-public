@@ -1,3 +1,8 @@
+## Local fixes (2026-10-17)
+
+* Notify a stable snapshot of hierarchy listeners, allowing live measurement refreshes to register or remove listeners without interrupting annotation creation or unlocking.
+* Add regression coverage for listener changes, real measurement-table refreshes during annotation workflows, annotation save/reload, and localized half-micron intensity inputs reaching the actual image reads.
+
 ## Version 0.7.0
 
 ### Enhancements
