@@ -60,8 +60,8 @@ Reference: [JavaFX 25 Platform API](https://openjfx.io/javadoc/25/javafx.graphic
 
 ## Verification
 
-Final verification passed 42 GUI tests, 5 processing tests, 17 queue tests,
-and the native geometry serialization regression (nine geometry forms): 65 tests.
+Final verification passed 44 GUI tests, 5 processing tests, 17 queue tests,
+and the native geometry serialization regression (nine geometry forms): 67 tests.
 Tests include worker stalls with live FX callbacks, concurrent edits, ordered
 saves, external file replacement, failed saves, load supersession, abandoned
 server closure, full-image detections, selection, recovery, and closed-image
@@ -93,6 +93,9 @@ preparation on 9222. The follow-up change prepares these shapes on workers for
 loads, undo and completed segmentation. Tests compare native shape paths across
 zoom levels, concurrent cache requests, and another viewer rendering while one
 worker is blocked preparing a shape.
+Annotation label positions use the same worker preparation boundary, preserving
+native placement across ROI kinds and avoiding a full vertex-list allocation
+on the UI thread for named tissue/empty regions.
 
 An isolated copy of the actual 429,485,780-byte 9222 hierarchy was then tested
 with an offscreen viewer sized 1726 × 1048. Direct, unprepared viewer setup took

@@ -13,6 +13,23 @@ import java.util.concurrent.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class TestImageRenderingPreparation {
+    @Test void namedRegionsPrepareLabelCoordinatesBeforeFxPainting() throws Exception {
+        var roi = polygon();
+        var reads = new java.util.concurrent.atomic.AtomicInteger();
+        var checked = (ROI)Proxy.newProxyInstance(ROI.class.getClassLoader(), new Class<?>[]{ROI.class}, (proxy, method, args) -> {
+            if (method.getName().equals("hashCode")) return System.identityHashCode(proxy);
+            if (method.getName().equals("equals")) return proxy == args[0];
+            if (method.getName().equals("getAllPoints")) {
+                assertFalse(javafx.application.Platform.isFxApplicationThread()); reads.incrementAndGet();
+            }
+            return method.invoke(roi,args);
+        });
+        var object = PathObjects.createAnnotationObject(checked); object.setName("Analysis region");
+        var hierarchy = new PathObjectHierarchy(); hierarchy.addObject(object);
+        ImageRenderingPreparation.prepare(hierarchy);
+        var label = FxTestTools.call(() -> qupath.lib.gui.viewer.overlays.AnnotationLabelCache.get(checked));
+        assertNotNull(label); assertEquals(1, reads.get());
+    }
     @Test void workerPreparationDoesNotBlockOtherViewersAndPreservesNativeShapes() throws Exception {
         var entered = new CountDownLatch(1); var release = new CountDownLatch(1);
         var roi = polygon();
