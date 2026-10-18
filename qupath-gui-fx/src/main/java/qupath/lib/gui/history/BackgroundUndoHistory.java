@@ -4,6 +4,7 @@ package qupath.lib.gui.history;
 import javafx.application.Platform;
 import org.slf4j.LoggerFactory;
 import qupath.lib.gui.background.BackgroundTasks;
+import qupath.lib.gui.viewer.ImageRenderingPreparation;
 import qupath.lib.images.ImageData;
 import qupath.lib.images.ImageDataSnapshot;
 import qupath.lib.objects.hierarchy.PathObjectHierarchy;
@@ -87,7 +88,11 @@ public final class BackgroundUndoHistory {
         if (disposed || !stillCurrent.getAsBoolean()) return null;
         var move = stack.prepareMove(redo);
         if (move == null) return null;
-        PathObjectHierarchy hierarchy = BackgroundTasks.io(move::readObject);
+        PathObjectHierarchy hierarchy = BackgroundTasks.io(() -> {
+            var restored = move.readObject();
+            if (restored != null) ImageRenderingPreparation.prepare(restored);
+            return restored;
+        });
         if (hierarchy == null || disposed || !stillCurrent.getAsBoolean() || !stack.commitMove(move)) return null;
         undoCount = stack.undoCount();
         redoCount = stack.redoCount();

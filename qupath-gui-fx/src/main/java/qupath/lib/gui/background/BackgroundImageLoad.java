@@ -3,6 +3,7 @@ package qupath.lib.gui.background;
 
 import qupath.fx.dialogs.Dialogs;
 import qupath.lib.gui.viewer.QuPathViewer;
+import qupath.lib.gui.viewer.ImageRenderingPreparation;
 import qupath.lib.images.ImageData;
 import qupath.lib.images.ImageDataSnapshot;
 import java.awt.image.BufferedImage;
@@ -46,7 +47,14 @@ public final class BackgroundImageLoad {
         public boolean load(Callable<ImageData<BufferedImage>> loader, BooleanSupplier contextCurrent, Path file) throws IOException {
             var loaded = BackgroundTasks.io(() -> {
                 var version = FileVersion.read(file);
-                return new Loaded(loader.call(), version);
+                var data = loader.call();
+                try {
+                    ImageRenderingPreparation.prepare(data.getHierarchy());
+                    return new Loaded(data, version);
+                } catch (Exception | Error error) {
+                    try { data.close(); } catch (Exception close) { error.addSuppressed(close); }
+                    throw error;
+                }
             });
             var result = loaded.data;
             boolean applied = false;

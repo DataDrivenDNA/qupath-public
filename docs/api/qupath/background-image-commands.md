@@ -52,11 +52,16 @@ Reference: [JavaFX 25 Platform API](https://openjfx.io/javadoc/25/javafx.graphic
   redo decode on the worker, then commit only if the image and edits remain
   unchanged. A second undo waits until the first finishes; drawing stays enabled.
   Viewer repaint remains a separate responsibility.
+- Native display shapes are prepared on the worker before loading, undo, or
+  segmentation publication. The existing simplification algorithm and analysis
+  geometry are unchanged. Cache creation never holds the shared cache lock
+  while converting a large ROI; cached levels remain readable while a worker
+  prepares additional levels.
 
 ## Verification
 
-Final verification passed 40 GUI tests, 5 processing tests, 17 queue tests,
-and the native geometry serialization regression (nine geometry forms): 63 tests.
+Final verification passed 42 GUI tests, 5 processing tests, 17 queue tests,
+and the native geometry serialization regression (nine geometry forms): 65 tests.
 Tests include worker stalls with live FX callbacks, concurrent edits, ordered
 saves, external file replacement, failed saves, load supersession, abandoned
 server closure, full-image detections, selection, recovery, and closed-image
@@ -82,6 +87,22 @@ Final verification adds undo ordering, redo invalidation, edits during pending
 undo, disposal, bounded pending history, two viewers sharing one hierarchy, and
 unfinished strokes during loading, saving, undo, native segmentation, queue
 capture and queue publication.
+
+The first live restart exposed a further 5-second pause in native display-shape
+preparation on 9222. The follow-up change prepares these shapes on workers for
+loads, undo and completed segmentation. Tests compare native shape paths across
+zoom levels, concurrent cache requests, and another viewer rendering while one
+worker is blocked preparing a shape.
+
+An isolated copy of the actual 429,485,780-byte 9222 hierarchy was then tested
+with an offscreen viewer sized 1726 × 1048. Direct, unprepared viewer setup took
+7.18 s. Background loading with display preparation took 3.78 s, with a maximum
+sampled FX callback delay of 0.84 s. Saving during a concurrent annotation took
+3.11 s, with a maximum callback delay of 0.15 s; the next save took 3.62 s with
+1.13 ms maximum delay. Original geometry fingerprints and file checksum matched.
+The full check took 29.81 s. This test used a 12 GiB heap; diagnostic GC logging
+recorded memory-cleanup pauses up to 0.61 s. The installed app retains its original
+50% RAM heap limit. No claim of zero rendering or garbage-collection pauses is made.
 
 No desktop keyboard, pointer or foreground activation was used. These checks do
 not claim that rendering arbitrary complex geometry can never cause a pause.

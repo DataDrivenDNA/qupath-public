@@ -34,6 +34,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.WeakHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * Helper class for managing simplified versions of a shape for rendering shapes at lower resolutions.
@@ -65,7 +66,12 @@ public class DownsampledShapeCache {
      * @return
      */
     private static DownsampledShapeCache getInstance(ROI roi) {
-        return shapeCache.computeIfAbsent(roi, DownsampledShapeCache::new);
+        var existing = shapeCache.get(roi);
+        if (existing != null) return existing;
+        // Native geometry conversion can take seconds. Never hold the shared
+        // cache lock while creating one shape: other viewers must keep painting.
+        var created = new DownsampledShapeCache(roi);
+        return shapeCache.computeIfAbsent(roi, ignored -> created);
     }
 
     /**
@@ -85,6 +91,14 @@ public class DownsampledShapeCache {
         }
     }
 
+    /** Prepare useful native cache levels on a worker before publishing a new ROI. */
+    public static void prepareForRendering(ROI roi) {
+        if (roi == null || !roi.isArea() || roi.getNumPoints() <= pointCountThreshold) return;
+        // Preparing the coarsest useful scale also fills each intermediate level.
+        getShapeForDownsample(roi, Math.max(minDownsample,
+                Math.max(roi.getBoundsWidth(), roi.getBoundsHeight())));
+    }
+
     private DownsampledShapeCache(ROI roi) {
         // The basic shape
         // Rather than count the points, just set to a very high value
@@ -100,7 +114,7 @@ public class DownsampledShapeCache {
                 downsampleStep = 1.5;
             else
                 downsampleStep = 2.0;
-            downsampledShapes = new ArrayList<>();
+            downsampledShapes = new CopyOnWriteArrayList<>();
         } else {
             downsampleStep = 2; // Not relevant
             downsampledShapes = Collections.emptyList();
@@ -123,9 +137,14 @@ public class DownsampledShapeCache {
                 // Progressively simplify the shape for downsamples.
                 // For this to work, it's important that downsamples are fixed multiples - otherwise we can have
                 // weird effects when we downsample a shape that has already been rounded to other values.
-                currentShape = downsampleShape(lastShape.shape(),
-                        ind == 0 ? minDownsample : lastDownsample * downsampleStep);
-                downsampledShapes.add(currentShape);
+                synchronized (this) {
+                    if (ind < downsampledShapes.size()) currentShape = downsampledShapes.get(ind);
+                    else {
+                        currentShape = downsampleShape(lastShape.shape(),
+                                ind == 0 ? minDownsample : lastDownsample * downsampleStep);
+                        downsampledShapes.add(currentShape);
+                    }
+                }
             } else {
                 currentShape = downsampledShapes.get(ind);
             }

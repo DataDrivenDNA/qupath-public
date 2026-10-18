@@ -4,6 +4,7 @@ package qupath.process.gui.commands.ml;
 import qupath.fx.dialogs.Dialogs;
 import qupath.lib.gui.QuPathGUI;
 import qupath.lib.gui.background.BackgroundTasks;
+import qupath.lib.gui.viewer.ImageRenderingPreparation;
 import qupath.lib.gui.prefs.PathPrefs;
 import qupath.lib.images.*;
 import qupath.lib.io.PathIO;
@@ -73,6 +74,7 @@ final class BackgroundObjectCreation {
                     boolean success = detections
                             ? PixelClassifierTools.createDetectionsFromPixelClassifier(snapshot.data().getHierarchy(), server, minArea, minHoleArea, options)
                             : PixelClassifierTools.createAnnotationsFromPixelClassifier(snapshot.data().getHierarchy(), server, minArea, minHoleArea, options);
+                    if (success) ImageRenderingPreparation.prepare(snapshot.data().getHierarchy());
                     return success ? signature : null;
                 }
             });

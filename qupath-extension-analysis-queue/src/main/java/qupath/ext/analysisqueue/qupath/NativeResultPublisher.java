@@ -3,6 +3,7 @@ package qupath.ext.analysisqueue.qupath;
 
 import qupath.ext.analysisqueue.workflow.*;
 import qupath.lib.gui.QuPathGUI;
+import qupath.lib.gui.viewer.ImageRenderingPreparation;
 import qupath.lib.images.ImageData;
 import qupath.lib.images.ImageDataSnapshot;
 import qupath.lib.io.PathIO;
@@ -45,6 +46,7 @@ public final class NativeResultPublisher implements ResultPublisher {
         try (var candidate = snapshot == null ? PathIO.<BufferedImage>readImageData(file) : snapshot.data()) {
             if (!SourceSignature.matches(candidate, input)) return "The outlined region or image settings changed after queuing. Your edits were kept; requeue the current outline.";
             String expected = SourceSignature.compute(result, input.regionIds());
+            ImageRenderingPreparation.prepare(result.getHierarchy());
             ResultMerger.applyVerified(candidate, result, input);
             try (var prepared = entry.prepareImageDataSave(candidate)) {
                 try (var verified = PathIO.<BufferedImage>readImageData(prepared.stagedPath())) {
