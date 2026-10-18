@@ -65,12 +65,15 @@ class TestBackgroundCommands {
             try {
                 assertTrue(entered.await(5, TimeUnit.SECONDS));
                 FxTestTools.call(() -> {
+                    assertEquals(1, BackgroundProgress.activeOperations().size());
+                    assertEquals("Writing annotations and measurements", BackgroundProgress.activeOperations().getFirst().phaseProperty().get());
                     fixture.data.getHierarchy().getAnnotationObjects().iterator().next().setName("newer edit");
                     fixture.data.getHierarchy().addObject(PathObjects.createAnnotationObject(ROIs.createRectangleROI(20,20,5,5)));
                     return null;
                 });
             } finally { release.countDown(); }
             assertFalse(task.get(15, TimeUnit.SECONDS));
+            assertTrue(FxTestTools.call(() -> BackgroundProgress.activeOperations().isEmpty()));
             assertTrue(fixture.data.isChanged());
             assertEquals(2, fixture.data.getHierarchy().getAnnotationObjects().size());
             try (var read = fixture.entry.readImageData()) {
@@ -109,6 +112,7 @@ class TestBackgroundCommands {
             var task = submit(() -> BackgroundImageSave.save(fixture.data,
                     delayed(fixture.entry, new CountDownLatch(0), new CountDownLatch(0), true), null));
             assertThrows(ExecutionException.class, () -> task.get(10, TimeUnit.SECONDS));
+            assertTrue(FxTestTools.call(() -> BackgroundProgress.activeOperations().isEmpty()));
             assertArrayEquals(before, Files.readAllBytes(fixture.entry.getImageDataPath()));
             assertTrue(fixture.data.isChanged());
         }

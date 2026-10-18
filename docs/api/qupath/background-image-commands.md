@@ -109,3 +109,28 @@ recorded memory-cleanup pauses up to 0.61 s. The installed app retains its origi
 
 No desktop keyboard, pointer or foreground activation was used. These checks do
 not claim that rendering arbitrary complex geometry can never cause a pause.
+
+## Progress display
+
+`BackgroundProgress` owns active operation lifetimes and stage labels. Workers
+report through JavaFX dispatch without waiting for the UI. Closing a handle
+removes it, including failures; late reports cannot recreate a completed task.
+`BackgroundProgressPane` displays each operation's image, stage, animated bar
+and elapsed time at the bottom of the main window. It does not take focus or
+disable annotation tools. It hides and stops its elapsed-time timer when idle.
+Multiple jobs remain separate, and the panel scrolls when they exceed its height.
+
+Native serialization and classifier tracing do not expose reliable fractional
+progress, so running bars are indeterminate rather than estimated percentages.
+Save, load and object creation report their actual stage. The queue's GUI adapter
+reports preparation and processing into the same display even when the queue
+window is hidden. Queue rows show empty bars while waiting, animated bars while
+preparing/processing, full bars only after completion, and explicit text for
+failures, interruptions and results needing review. Job persistence and analysis
+settings are unchanged.
+
+Progress verification passed 46 GUI, 5 processing and 17 queue tests (68 total).
+The native JavaFX rendering check covers light/dark progress panels at 600 and
+1000 px, queue tables at 720 and 1090 px, all nine queue states, and hidden idle
+state. Additional tests exercise concurrent worker reporting, continued FX input,
+late reports, failures, and native save progress while newer annotations survive.

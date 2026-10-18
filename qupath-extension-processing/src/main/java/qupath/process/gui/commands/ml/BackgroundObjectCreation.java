@@ -4,6 +4,7 @@ package qupath.process.gui.commands.ml;
 import qupath.fx.dialogs.Dialogs;
 import qupath.lib.gui.QuPathGUI;
 import qupath.lib.gui.background.BackgroundTasks;
+import qupath.lib.gui.background.BackgroundProgress;
 import qupath.lib.gui.viewer.ImageRenderingPreparation;
 import qupath.lib.gui.prefs.PathPrefs;
 import qupath.lib.images.*;
@@ -66,20 +67,28 @@ final class BackgroundObjectCreation {
                 .map(PathObject::getID).collect(java.util.stream.Collectors.toSet());
         ACTIVE.add(key);
         boolean completed = false;
+        var progress = BackgroundProgress.start("Create regions — " + source.getServerMetadata().getName(),
+                "Waiting for the analysis worker");
         try {
             notification.accept("Creating regions in the background. You can continue annotating other regions or images.");
             var baseline = BackgroundTasks.analysis(() -> {
+                progress.phase("Checking source annotations");
                 var signature = ImageDataFingerprint.compute(snapshot.data(), ids);
+                progress.phase(detections ? "Creating detections" : "Creating classified annotations");
                 try (var server = PixelClassifierTools.createPixelClassificationServer(snapshot.data(), classifier)) {
                     boolean success = detections
                             ? PixelClassifierTools.createDetectionsFromPixelClassifier(snapshot.data().getHierarchy(), server, minArea, minHoleArea, options)
                             : PixelClassifierTools.createAnnotationsFromPixelClassifier(snapshot.data().getHierarchy(), server, minArea, minHoleArea, options);
-                    if (success) ImageRenderingPreparation.prepare(snapshot.data().getHierarchy());
+                    if (success) {
+                        progress.phase("Preparing regions for display");
+                        ImageRenderingPreparation.prepare(snapshot.data().getHierarchy());
+                    }
                     return success ? signature : null;
                 }
             });
             if (baseline == null) return false;
             completed = true;
+            progress.phase("Applying completed regions");
             var live = findOpen(gui, source, project, entry, savedPath);
             if (live == source && unchanged.getAsBoolean()) {
                 ImageDataBranchUpdate.apply(source, snapshot.data(), ids);
@@ -99,6 +108,7 @@ final class BackgroundObjectCreation {
                     if (step != null) live.getHistoryWorkflow().addStep(step);
                 } finally { BackgroundTasks.io(() -> { candidate.close(); return null; }); }
             } else {
+                progress.phase("Saving completed regions to the closed image");
                 publishClosed(() -> findOpen(gui, source, project, entry, savedPath) != null,
                         entry, savedPath, snapshot.data(), ids, baseline, step);
             }
@@ -106,6 +116,7 @@ final class BackgroundObjectCreation {
             return true;
         } catch (Exception error) {
             if (completed) {
+                progress.phase("Saving completed regions separately for recovery");
                 var recovery = BackgroundTasks.io(() -> {
                     if (step != null) snapshot.data().getHistoryWorkflow().addStep(step);
                     var folder = recoveryDirectory;
@@ -120,7 +131,8 @@ final class BackgroundObjectCreation {
             throw new IOException(error);
         } finally {
             ACTIVE.remove(key);
-            BackgroundTasks.io(() -> { snapshot.close(); return null; });
+            try { BackgroundTasks.io(() -> { snapshot.close(); return null; }); }
+            finally { progress.close(); }
         }
     }
 

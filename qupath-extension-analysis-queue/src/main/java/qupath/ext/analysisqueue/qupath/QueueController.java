@@ -9,6 +9,7 @@ import qupath.ext.analysisqueue.queue.Job;
 import qupath.ext.analysisqueue.workflow.AnalysisInput;
 import qupath.ext.analysisqueue.workflow.Synj1Processor;
 import qupath.lib.gui.QuPathGUI;
+import qupath.lib.gui.background.BackgroundProgress;
 import qupath.lib.gui.prefs.PathPrefs;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -28,7 +29,8 @@ public final class QueueController implements AutoCloseable {
 
     public QueueController(QuPathGUI gui, Path root) throws Exception {
         this.gui = gui; store = new DiskJobStore(root);
-        try { queue = new AnalysisQueue(store, new Synj1Processor(new NativeResultPublisher(gui, FxExecutor.application()))); }
+        try { queue = new AnalysisQueue(store, new ProgressReportingProcessor(
+                new Synj1Processor(new NativeResultPublisher(gui, FxExecutor.application())))); }
         catch (Exception e) { store.close(); throw e; }
         queue.setPaused(pausePreference.get()); queue.start();
     }
@@ -44,10 +46,14 @@ public final class QueueController implements AutoCloseable {
         var directory = store.directory(job.id());
         var capture = new InputCapture();
         var frozen = capture.freeze(project, data, selection, job, directory);
+        var progress = BackgroundProgress.start("Queue input — " + entry.getImageName(), "Saving and verifying input");
         try {
             queue.enqueue(job);
-            preparation.submit(() -> prepare(capture, frozen));
+            preparation.submit(() -> {
+                try (progress) { prepare(capture, frozen); }
+            });
         } catch (Exception error) {
+            progress.close();
             frozen.close();
             throw error;
         }

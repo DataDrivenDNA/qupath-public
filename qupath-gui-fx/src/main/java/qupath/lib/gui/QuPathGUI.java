@@ -1528,7 +1528,7 @@ public class QuPathGUI {
 					try { candidate.close(); } catch (Exception close) { error.addSuppressed(close); }
 					throw error;
 				}
-			}, () -> getProject() == project && getAllViewers().contains(viewer), entry.getImageDataPath());
+			}, () -> getProject() == project && getAllViewers().contains(viewer), entry.getImageDataPath(), entry.getImageName());
 			if (!loaded) return false;
 			var loadedData = viewer.getImageData();
 			if (loadedData.getImageType() == null || loadedData.getImageType() == ImageType.UNSET) {
@@ -1811,7 +1811,8 @@ public class QuPathGUI {
                             try { openedServer.close(); } catch (Exception close) { error.addSuppressed(close); }
                             throw error;
                         }
-                    }, () -> getProject() == null && getAllViewers().contains(destination), null)) return false;
+                    }, () -> getProject() == null && getAllViewers().contains(destination), null,
+                            ServerTools.getDisplayableImageName(openedServer))) return false;
                     imageData = viewer.getImageData();
 				}
 				

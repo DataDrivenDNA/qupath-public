@@ -45,11 +45,24 @@ public final class BackgroundImageLoad {
         }
         /** Loader owns the returned server; abandoned results are closed on the worker. */
         public boolean load(Callable<ImageData<BufferedImage>> loader, BooleanSupplier contextCurrent, Path file) throws IOException {
+            return load(loader, contextCurrent, file, file == null ? "Image" : file.getFileName().toString());
+        }
+        public boolean load(Callable<ImageData<BufferedImage>> loader, BooleanSupplier contextCurrent,
+                            Path file, String imageName) throws IOException {
+            try (var progress = BackgroundProgress.start("Open — " + imageName, "Waiting for the I/O worker")) {
+                return load(loader, contextCurrent, file, progress);
+            }
+        }
+        private boolean load(Callable<ImageData<BufferedImage>> loader, BooleanSupplier contextCurrent,
+                             Path file, BackgroundProgress.Operation progress) throws IOException {
             var loaded = BackgroundTasks.io(() -> {
+                progress.phase("Reading image and annotations");
                 var version = FileVersion.read(file);
                 var data = loader.call();
                 try {
+                    progress.phase("Preparing annotations for display");
                     ImageRenderingPreparation.prepare(data.getHierarchy());
+                    progress.phase("Waiting to display image");
                     return new Loaded(data, version);
                 } catch (Exception | Error error) {
                     try { data.close(); } catch (Exception close) { error.addSuppressed(close); }
@@ -63,6 +76,7 @@ public final class BackgroundImageLoad {
                     notification.accept("Loading finished. Your newer image choice or annotation edits were kept. Open the image again when ready.");
                     return false;
                 }
+                progress.phase("Displaying image");
                 try { viewer.setImageData(result); }
                 catch (IOException | RuntimeException error) {
                     // Viewer initialization can fail after changing its image property.

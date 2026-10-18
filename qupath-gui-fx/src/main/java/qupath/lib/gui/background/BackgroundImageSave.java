@@ -25,6 +25,14 @@ public final class BackgroundImageSave {
     /** @return true if the saved snapshot still contains all current edits. */
     public static boolean save(ImageData<BufferedImage> source,
                                ProjectImageEntry<BufferedImage> entry, Path file) throws IOException {
+        var name = entry == null ? source.getServerMetadata().getName() : entry.getImageName();
+        try (var progress = BackgroundProgress.start("Save — " + name, "Waiting for the I/O worker")) {
+            return save(source, entry, file, progress);
+        }
+    }
+
+    private static boolean save(ImageData<BufferedImage> source, ProjectImageEntry<BufferedImage> entry,
+                                Path file, BackgroundProgress.Operation progress) throws IOException {
         var snapshot = ImageDataSnapshot.capture(source);
         var target = entry == null ? file.toAbsolutePath().normalize() : entry.getImageDataPath();
         var version = FileVersion.read(target);
@@ -32,6 +40,7 @@ public final class BackgroundImageSave {
         var current = new AtomicBoolean();
         BackgroundTasks.io(() -> {
             try (snapshot) {
+                progress.phase("Writing annotations and measurements");
                 var actual = FileVersion.read(target);
                 var previous = PUBLISHED.get(target);
                 boolean followsOwnSave = previous != null && previous.sequence < request
@@ -49,12 +58,14 @@ public final class BackgroundImageSave {
                     return saved == null ? null : Path.of(saved);
                 }
                 try (var prepared = staged) {
+                    progress.phase("Finalizing saved file");
                     prepared.commit();
                     if (target != null) PUBLISHED.put(target, new Published(request, new WeakReference<>(source), prepared.committedVersion()));
                     return prepared.targetPath();
                 }
             }
         }, saved -> {
+            progress.close();
             current.set(snapshot.unchanged() && !ImageDataSnapshot.hasUncommittedObjects(source));
             if (saved != null) source.setLastSavedPath(saved.toString(), current.get());
             else if (current.get()) source.setChanged(false);
