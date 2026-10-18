@@ -16,7 +16,7 @@ public final class ImageDataFingerprint {
     private ImageDataFingerprint() {}
     public static List<PathObject> roots(ImageData<BufferedImage> data, List<String> ids) {
         var byId = new HashMap<String, PathObject>();
-        data.getHierarchy().getAnnotationObjects().forEach(p -> byId.put(p.getID().toString(), p));
+        branch(data.getHierarchy().getRootObject()).forEach(p -> byId.put(p.getID().toString(), p));
         return ids.stream().map(id -> {
             var object = byId.get(id);
             if (object == null) throw new IllegalStateException("An outlined region was removed: " + id);

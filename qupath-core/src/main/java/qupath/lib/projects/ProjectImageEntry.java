@@ -96,6 +96,9 @@ public interface ProjectImageEntry<T> extends UriResource, MinimalMetadataStore 
 	 * @return
 	 */
 	Path getEntryPath();
+
+	/** Native data path, or null when the storage backend does not expose a local file. */
+	default Path getImageDataPath() { return null; }
 	
 	
 	/**

@@ -5,7 +5,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-import java.nio.file.attribute.BasicFileAttributes;
+import qupath.lib.io.FileVersion;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -17,28 +17,34 @@ import java.util.Objects;
  * Close on the worker after commit (or abandonment) to remove staging files.
  */
 public final class PreparedImageDataSave implements AutoCloseable {
-    private record Version(long size, Object modified, Object created, Object key) {
-        static Version read(Path path) throws IOException {
-            try {
-                var a = Files.readAttributes(path, BasicFileAttributes.class);
-                return new Version(a.size(), a.lastModifiedTime(), a.creationTime(), a.fileKey());
-            } catch (java.nio.file.NoSuchFileException e) { return null; }
+    /** Stage a standalone native save without changing its authoritative file. */
+    public static <T> PreparedImageDataSave prepare(Path file, qupath.lib.images.ImageData<T> data) throws IOException {
+        var target = file.toAbsolutePath().normalize();
+        var prepared = new PreparedImageDataSave(target, List.of(target),
+                () -> data.setLastSavedPath(target.toString(), true));
+        try (var stream = Files.newOutputStream(prepared.stagedPath())) {
+            qupath.lib.io.PathIO.writeImageData(stream, data);
+        } catch (IOException | RuntimeException error) {
+            try { prepared.close(); } catch (IOException cleanup) { error.addSuppressed(cleanup); }
+            throw error;
         }
+        return prepared;
     }
     private final Object owner;
     private final List<Path> targets;
-    private final List<Version> versions;
+    private final List<FileVersion> versions;
     private final Path directory;
     private final Runnable committed;
     private boolean finished;
     private boolean retainRecovery;
+    private FileVersion committedVersion;
 
     PreparedImageDataSave(Object owner, List<Path> targets, Runnable committed) throws IOException {
         this.owner = owner;
         this.targets = List.copyOf(targets);
         this.committed = committed;
         versions = new ArrayList<>();
-        for (var path : targets) versions.add(Version.read(path));
+        for (var path : targets) versions.add(FileVersion.read(path));
         directory = Files.createTempDirectory(targets.getFirst().getParent(), ".prepared-save-");
         try {
             // Copy rollback files on the worker. Commit can atomically replace the
@@ -56,13 +62,15 @@ public final class PreparedImageDataSave implements AutoCloseable {
     public Path stagedPath() { return staged(0); }
     /** Final native data path. */
     public Path targetPath() { return targets.getFirst(); }
+    /** Version installed by commit, captured under the same entry lock. */
+    public FileVersion committedVersion() { return committedVersion; }
     Path staged(int index) { return directory.resolve("new-" + index); }
     private Path backup(int index) { return directory.resolve("previous-" + index); }
 
     /** Fast optimistic concurrency check; performs no content hashing. */
     public boolean sourceUnchanged() throws IOException {
         for (int i = 0; i < targets.size(); i++)
-            if (!Objects.equals(versions.get(i), Version.read(targets.get(i)))) return false;
+            if (!Objects.equals(versions.get(i), FileVersion.read(targets.get(i)))) return false;
         return true;
     }
 
@@ -81,6 +89,7 @@ public final class PreparedImageDataSave implements AutoCloseable {
                     installed.add(i);
                 }
                 committed.run();
+                committedVersion = FileVersion.read(targetPath());
                 finished = true;
             } catch (IOException | RuntimeException error) {
                 for (int i = targets.size() - 1; i >= 0; i--) {

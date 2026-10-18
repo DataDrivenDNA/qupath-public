@@ -629,7 +629,8 @@ class DefaultProject implements Project<BufferedImage> {
 			return Paths.get(getBasePath().toString(), "data", getUniqueName());
 		}
 		
-		private Path getImageDataPath() {
+		@Override
+		public Path getImageDataPath() {
 			return Paths.get(getEntryPath().toString(), "data.qpdata");
 		}
 		

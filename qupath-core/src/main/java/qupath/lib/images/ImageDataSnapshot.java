@@ -1,8 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package qupath.lib.images;
 
-import qupath.lib.images.ImageDataFingerprint;
-import qupath.lib.images.ImageData;
 import qupath.lib.objects.*;
 import qupath.lib.objects.hierarchy.DefaultTMAGrid;
 import qupath.lib.objects.hierarchy.PathObjectHierarchy;
@@ -45,6 +43,10 @@ public final class ImageDataSnapshot implements AutoCloseable {
         for (var object : ImageDataFingerprint.branch(root)) {
             if (object != root) copies.get(object.getParent()).addChildObject(copies.get(object));
         }
+        var selection = source.getHierarchy().getSelectionModel();
+        hierarchy.getSelectionModel().setSelectedObjects(
+                selection.getSelectedObjects().stream().map(copies::get).filter(Objects::nonNull).toList(),
+                copies.get(selection.getSelectedObject()));
         var data = new ImageData<>(source.getServerBuilder(), hierarchy, source.getImageType());
         if (source.isBrightfield()) data.setColorDeconvolutionStains(source.getColorDeconvolutionStains());
         source.getProperties().forEach(data::setProperty);
@@ -56,6 +58,29 @@ public final class ImageDataSnapshot implements AutoCloseable {
     public ImageData<BufferedImage> source() { return source; }
     /** Call on FX, serialized with editor mutations. No geometry traversal or disk I/O. */
     public boolean unchanged() { return stamp.equals(stamp(source)); }
+
+    /** Cheap edit guard; capture and evaluate on the hierarchy's owner thread. */
+    public static java.util.function.BooleanSupplier watch(ImageData<BufferedImage> source) {
+        var before = stamp(source);
+        return () -> before.equals(stamp(source));
+    }
+
+    /** Guard selected branches while allowing edits elsewhere in the image. */
+    public static java.util.function.BooleanSupplier watchBranches(ImageData<BufferedImage> source, List<String> ids) {
+        var before = branchStamp(source, ids);
+        return () -> {
+            try { return before.equals(branchStamp(source, ids)); }
+            catch (IllegalStateException removed) { return false; }
+        };
+    }
+    private static List<Object> branchStamp(ImageData<BufferedImage> data, List<String> ids) {
+        var result = new ArrayList<Object>();
+        result.add(data.getImageType()); result.add(data.getColorDeconvolutionStains());
+        result.add(data.getServerMetadata());
+        for (var root : ImageDataFingerprint.roots(data, ids))
+            appendObjects(result, ImageDataFingerprint.branch(root));
+        return result;
+    }
     private record Identity(Object value) {
         @Override public boolean equals(Object other) { return other instanceof Identity i && value == i.value; }
         @Override public int hashCode() { return System.identityHashCode(value); }
@@ -66,14 +91,17 @@ public final class ImageDataSnapshot implements AutoCloseable {
         result.add(data.getServerMetadata()); result.add(new LinkedHashMap<>(data.getProperties()));
         result.add(new ArrayList<>(data.getHistoryWorkflow().getSteps()));
         result.add(new Identity(data.getHierarchy().getTMAGrid()));
-        for (var p : ImageDataFingerprint.branch(data.getHierarchy().getRootObject())) {
+        appendObjects(result, ImageDataFingerprint.branch(data.getHierarchy().getRootObject()));
+        return result;
+    }
+    private static void appendObjects(List<Object> result, List<PathObject> objects) {
+        for (var p : objects) {
             result.add(Arrays.asList(p.getID(), p.getParent() == null ? null : p.getParent().getID(), p.getClass(),
                     new Identity(p.getROI()), new Identity(p instanceof PathCellObject cell ? cell.getNucleusROI() : null),
                     p.getName(), p.getPathClass(), p.getClassProbability(), p.getColor(), p.isLocked(),
                     p instanceof TMACoreObject core ? core.isMissing() : null,
                     new LinkedHashMap<>(p.getMeasurementList().asMap()), new LinkedHashMap<>(p.getMetadata())));
         }
-        return result;
     }
     @Override public void close() throws Exception { data.close(); }
 }

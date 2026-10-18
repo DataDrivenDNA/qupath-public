@@ -65,6 +65,7 @@ import qupath.lib.analysis.DistanceTools;
 import qupath.lib.analysis.features.ObjectMeasurements.ShapeFeatures;
 import qupath.lib.common.GeneralTools;
 import qupath.lib.gui.QuPathGUI;
+import qupath.lib.gui.background.BackgroundImageSave;
 import qupath.lib.gui.UserDirectoryManager;
 import qupath.lib.gui.actions.ActionTools;
 import qupath.lib.gui.images.servers.RenderedImageServer;
@@ -819,7 +820,7 @@ public class Commands {
 			var entry = project == null ? null : project.getEntry(imageData);
 			if (entry != null) {
 				if (overwriteExisting || Dialogs.showConfirmDialog("Save changes", "Save changes to " + entry.getImageName() + "?")) {
-					entry.saveImageData(imageData);
+					BackgroundImageSave.save(imageData, entry, null);
 					return true;
 				} else
 					return false;
@@ -851,7 +852,7 @@ public class Commands {
 				}
 				if (file == null)
 					return false;
-				PathIO.writeImageData(file, imageData);
+				BackgroundImageSave.save(imageData, null, file.toPath());
 				return true;
 			}
 		} catch (IOException e) {

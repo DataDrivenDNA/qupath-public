@@ -23,6 +23,10 @@
 
 package qupath.lib.gui;
 
+import qupath.lib.gui.background.BackgroundTasks;
+import qupath.lib.gui.background.BackgroundImageSave;
+import qupath.lib.gui.background.BackgroundImageLoad;
+
 import com.google.common.collect.BiMap;
 import com.google.common.collect.HashBiMap;
 import ij.IJ;
@@ -1430,85 +1434,49 @@ public class QuPathGUI {
 				}
 			}
 			
-			ServerBuilder<BufferedImage> serverBuilder = null;
-			ImageData<BufferedImage> imageData = viewer.getImageData();
-			
-			// If we are loading data related to the same image server, load into that - otherwise open a new image if we can find it
-			try {
-				serverBuilder = PathIO.extractServerBuilder(file.toPath());
-			} catch (Exception e) {
-				logger.warn("Unable to read image server from file: {}", e.getLocalizedMessage());
-			}
-			var existingBuilder = imageData == null || imageData.getServer() == null ? null : imageData.getServer().getBuilder();
-			boolean sameServer = Objects.equals(existingBuilder, serverBuilder);			
-			
-			
-			// If we don't have the same server, try to check the path is valid.
-			// If it isn't, then prompt to enter a new path.
-			// Currently, URLs are always assumed to be valid, but files may have moved.
-			// TODO: Make it possible to recover data if a stored URL ceases to be valid.
-			ImageServer<BufferedImage> server = null;
-			if (sameServer || (imageData != null && keepExistingServer))
-				server = imageData.getServer();
-			else {
-				try {
-					server = serverBuilder.build();
-				} catch (Exception e) {
-					logger.error("Unable to build server " + serverBuilder, e);
-				}
-				// TODO: Ideally we would use an interface like ProjectCheckUris instead
-				if (server == null && serverBuilder != null) {
-					var uris = serverBuilder.getURIs();
-					var urisUpdated = new HashMap<URI, URI>();
-					for (var uri : uris) {
-						var pathUri = GeneralTools.toPath(uri);
-						if (pathUri != null && Files.exists(pathUri)) {
-							urisUpdated.put(uri, uri);
-							continue;
-						}
-						String currentPath = pathUri == null ? uri.toString() : pathUri.toString();
-						var newPath = FileChoosers.promptForFilePathOrURI("Set path to missing image", currentPath);
-						if (newPath == null)
-							return false;
-						try {
-							urisUpdated.put(uri, GeneralTools.toURI(newPath));
-						} catch (URISyntaxException e) {
-							throw new IOException(e);
-						}
-					}
-					serverBuilder = serverBuilder.updateURIs(urisUpdated);
-					try {
-						server = serverBuilder.build();
-					} catch (Exception e) {
-						logger.error("Unable to build server {}", serverBuilder, e);
-					}
-				}
-				if (server == null)
-					return false;
+			var destination = viewer;
+			var request = backgroundImageLoad.begin(viewer);
+			var imageData = viewer.getImageData();
+			if (promptToSaveChanges && imageData != null && imageData.isChanged()
+					&& !isReadOnly() && !promptToSaveChangesOrCancel("Save changes", imageData)) return false;
+			if (!request.current()) return false;
 
-				// Small optimization... put in a thumbnail request early in a background thread.
-				// This way that it will be fetched while the image data is being read -
-				// generally leading to improved performance in the viewer's setImageData method
-				// (specifically the updating of the ImageDisplay, which needs a thumbnail)
-				final ImageServer<BufferedImage> serverTemp = server;
-				threadPoolManager.submitShortTask(() -> imageRegionStore.getThumbnail(serverTemp, 0, 0, true));
+			var storedBuilder = BackgroundTasks.io(() -> {
+				try { return PathIO.<BufferedImage>extractServerBuilder(file.toPath()); }
+				catch (IOException error) {
+					logger.warn("Unable to extract image server; trying native data reader", error);
+					return null;
+				}
+			});
+			var existingBuilder = imageData == null ? null : imageData.getServerBuilder();
+			var builder = keepExistingServer && existingBuilder != null ? existingBuilder : storedBuilder;
+			// URI repair stays on FX. Each loaded image owns a newly opened server, so
+			// abandoning a load can never close the server used by the current viewer.
+			if (builder != null) {
+				var replacements = new HashMap<URI, URI>();
+				for (var uri : builder.getURIs()) {
+					var path = GeneralTools.toPath(uri);
+					if (path != null && !Files.exists(path)) {
+						var replacement = FileChoosers.promptForFilePathOrURI("Set path to missing image", path.toString());
+						if (replacement == null) return false;
+						try { replacements.put(uri, GeneralTools.toURI(replacement)); }
+						catch (URISyntaxException error) { throw new IOException(error); }
+					}
+				}
+				if (!replacements.isEmpty()) builder = builder.updateURIs(replacements);
 			}
-			
-			
-			if (promptToSaveChanges && imageData != null && imageData.isChanged()) {
-				if (!isReadOnly() && !promptToSaveChangesOrCancel("Save changes", imageData))
-					return false;
-			}
-			
-			try {
-				ImageData<BufferedImage> imageData2 = PathIO.readImageData(file, server);
-				viewer.setImageData(imageData2);
-			} catch (IOException e) {
-				Dialogs.showErrorMessage("Read image data", "Error reading image data\n" + e.getLocalizedMessage());
-				logger.error(e.getMessage(), e);
-			}
-			
-			return true;
+			var chosenBuilder = builder;
+			return request.load(() -> {
+				var candidate = chosenBuilder == null ? PathIO.<BufferedImage>readImageData(file)
+						: PathIO.readImageData(file.toPath(), chosenBuilder);
+				try {
+					imageRegionStore.getThumbnail(candidate.getServer(), 0, 0, true);
+					return candidate;
+				} catch (Exception error) {
+					try { candidate.close(); } catch (Exception close) { error.addSuppressed(close); }
+					throw error;
+				}
+			}, () -> getAllViewers().contains(destination), file.toPath());
 		}
 
 
@@ -1528,6 +1496,7 @@ public class QuPathGUI {
 		
 		// Check if we're changing ImageData at all
 		var viewer = getViewer();
+		var request = backgroundImageLoad.begin(viewer);
 		ImageData<BufferedImage> imageData = viewer.getImageData();
 		if (imageData != null && project.getEntry(imageData) == entry) {
 			return false;
@@ -1548,34 +1517,38 @@ public class QuPathGUI {
 				return false;
 		}
 
-		// Check if we need to rotate the image
 		try {
-			imageData = entry.readImageData();
-			viewer.setImageData(imageData);
-			if (imageData != null && (imageData.getImageType() == null || imageData.getImageType() == ImageType.UNSET)) {
+			boolean loaded = request.load(() -> {
+				var candidate = entry.readImageData();
+				try {
+					imageRegionStore.getThumbnail(candidate.getServer(), 0, 0, true);
+					return candidate;
+				} catch (Exception error) {
+					try { candidate.close(); } catch (Exception close) { error.addSuppressed(close); }
+					throw error;
+				}
+			}, () -> getProject() == project && getAllViewers().contains(viewer), entry.getImageDataPath());
+			if (!loaded) return false;
+			var loadedData = viewer.getImageData();
+			if (loadedData.getImageType() == null || loadedData.getImageType() == ImageType.UNSET) {
 				var setType = PathPrefs.imageTypeSettingProperty().get();
 				if (setType == ImageTypeSetting.AUTO_ESTIMATE || setType == ImageTypeSetting.PROMPT) {
-					var type = GuiTools.estimateImageType(imageData.getServer(), imageRegionStore.getThumbnail(imageData.getServer(), 0, 0, true));
-					logger.info("Image type estimated to be {}", type);
-					if (setType == ImageTypeSetting.PROMPT) {
-						ImageDetailsPane.promptToSetImageType(imageData, type);
-					} else {
-						imageData.setImageType(type);
-						imageData.setChanged(false); // Don't want to retain this as a change resulting in a prompt to save the data
-					}
+					var type = GuiTools.estimateImageType(loadedData.getServer(),
+							imageRegionStore.getThumbnail(loadedData.getServer(), 0, 0, true));
+					if (setType == ImageTypeSetting.PROMPT) ImageDetailsPane.promptToSetImageType(loadedData, type);
+					else { loadedData.setImageType(type); loadedData.setChanged(false); }
 				}
 			}
 			return true;
 		} catch (Exception e) {
 			Dialogs.showErrorMessage("Load ImageData", "Error attempting to load image data\n" + e.getLocalizedMessage());
 			logger.error(e.getMessage(), e);
-			// If this failed
-			viewer.resetImageData();
 			return false;
 		}
 	}
+	private final BackgroundImageLoad backgroundImageLoad = new BackgroundImageLoad();
 	
-	
+
 	ProjectImageEntry<BufferedImage> getProjectImageEntry(ImageData<BufferedImage> imageData) {
 		if (imageData == null)
 			return null;
@@ -1618,9 +1591,9 @@ public class QuPathGUI {
 						FileChoosers.createExtensionFilter("QuPath data files", PathPrefs.getSerializationExtension()));
 				if (file == null)
 					return false;
-				PathIO.writeImageData(file, imageData);
+				if (!BackgroundImageSave.save(imageData, null, file.toPath())) return false;
 			} else {
-				entry.saveImageData(imageData);
+				if (!BackgroundImageSave.save(imageData, entry, null)) return false;
 				var project = getProject();
 				if (project != null)
 					project.syncChanges();
@@ -1699,6 +1672,8 @@ public class QuPathGUI {
 			}
 		}
 		
+		var destination = viewer;
+        var request = backgroundImageLoad.begin(viewer);
 		ImageServer<BufferedImage> server = viewer.getServer();
 		String pathOld = null;
 		File fileBase = null;
@@ -1764,9 +1739,12 @@ public class QuPathGUI {
 					return false;
 				return openImageEntry(entries.get(0));
 			}
-			ImageServer<BufferedImage> serverNew = null;
+			if (viewer.getImageData() != null && !checkSaveChanges(viewer.getImageData())) return false;
+            if (!request.current()) return false;
+            ImageServer<BufferedImage> serverNew = null;
 
-			UriImageSupport<BufferedImage> support = ImageServerProvider.getPreferredUriImageSupport(BufferedImage.class, pathNew);
+			var requestedPath = pathNew;
+            UriImageSupport<BufferedImage> support = BackgroundTasks.io(() -> ImageServerProvider.getPreferredUriImageSupport(BufferedImage.class, requestedPath));
 			List<ServerBuilder<BufferedImage>> builders = support == null ? Collections.emptyList() : support.getBuilders();
 			
 			if (builders.isEmpty()) {
@@ -1777,7 +1755,7 @@ public class QuPathGUI {
 			}
 			else if (builders.size() == 1) {
 				try {
-					serverNew = builders.get(0).build();
+					serverNew = BackgroundTasks.io(() -> builders.get(0).build());
 				} catch (Exception e) {	
 					logger.error("Error building server: " + e.getLocalizedMessage(), e);
 				}
@@ -1822,10 +1800,20 @@ public class QuPathGUI {
 							}
 						}
 					}
-					imageData = createNewImageData(serverNew);
+					var openedServer = serverNew;
+                    boolean estimateType = PathPrefs.imageTypeSettingProperty().get() == ImageTypeSetting.AUTO_ESTIMATE;
+                    if (!request.load(() -> {
+                        try {
+                            imageRegionStore.getThumbnail(openedServer, 0, 0, true);
+                            return createNewImageData(openedServer, estimateType);
+                        } catch (Exception error) {
+                            try { openedServer.close(); } catch (Exception close) { error.addSuppressed(close); }
+                            throw error;
+                        }
+                    }, () -> getProject() == null && getAllViewers().contains(destination), null)) return false;
+                    imageData = viewer.getImageData();
 				}
 				
-				viewer.setImageData(imageData);
 
 				if (imageData.getImageType() == ImageType.UNSET && PathPrefs.imageTypeSettingProperty().get() == ImageTypeSetting.PROMPT) {
 					var type = GuiTools.estimateImageType(serverNew, imageRegionStore.getThumbnail(serverNew, 0, 0, true));
@@ -2600,18 +2588,19 @@ public class QuPathGUI {
 			}
 		}
 		
-		// Check if we want to save the current image; we could still veto the project change at this point
-		for (var viewer : getAllViewers()) {
-			if (viewer == null || !viewer.hasServer())
-				continue;
-			var imageData = viewer.getImageData();
-			if (imageData != null) {
-				if (!checkSaveChanges(imageData))
-					return;
-				viewer.resetImageData();
-			}
+		// Capture every viewer before saving any; background saves allow more edits meanwhile.
+		var viewersToClose = List.copyOf(getAllViewers());
+		var closing = new java.util.IdentityHashMap<QuPathViewer, ImageData<BufferedImage>>();
+		var guards = new java.util.IdentityHashMap<QuPathViewer, java.util.function.BooleanSupplier>();
+		for (var viewer : viewersToClose) {
+			var data = viewer.getImageData();
+			closing.put(viewer, data);
+			guards.put(viewer, data == null ? () -> true : qupath.lib.images.ImageDataSnapshot.watch(data));
 		}
-		
+		for (var data : closing.values()) {
+			if (data != null && !checkSaveChanges(data)) return;
+		}
+
 		// Confirm the URIs for the new project
 		if (project != null) {
 			try {
@@ -2625,7 +2614,12 @@ public class QuPathGUI {
 			}
 		}
 		
-		// Store in recent list, if needed
+		if (getProject() != currentProject || !viewersToClose.equals(List.copyOf(getAllViewers()))) return;
+        for (var viewer : closing.keySet())
+            if (viewer.getImageData() != closing.get(viewer) || !guards.get(viewer).getAsBoolean()) return;
+        closing.keySet().forEach(QuPathViewer::resetImageData);
+
+        // Store in recent list, if needed
 		URI uri = project == null ? null : project.getURI();
 		if (uri != null) {
 			ObservableList<URI> list = PathPrefs.getRecentProjectList();			
@@ -2736,6 +2730,7 @@ public class QuPathGUI {
 			if (!isReadOnly() && !promptToSaveChangesOrCancel(dialogTitle, imageData))
 				return false;
 		}
+		if (viewer.getImageData() != imageData) return false;
 		viewer.resetImageData();
 		return true;
 	}
@@ -2775,13 +2770,14 @@ public class QuPathGUI {
 			}
 			try {
 				if (entry != null) {
-					entry.saveImageData(imageData);
+					if (!BackgroundImageSave.save(imageData, entry, null)) return false;
 					project.syncChanges(); // Should make sure we save the project in case metadata has changed as well
 				} else
-					PathIO.writeImageData(filePrevious, imageData);
+					if (!BackgroundImageSave.save(imageData, null, filePrevious.toPath())) return false;
 			} catch (IOException e) {
 				Dialogs.showErrorMessage("Save ImageData", "Error saving image data\n" + e.getLocalizedMessage());
 				logger.error(e.getMessage(), e);
+				return false;
 			}
 		}
 		return true;

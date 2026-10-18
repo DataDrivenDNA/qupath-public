@@ -392,36 +392,14 @@ public class PixelClassifierUI {
 		if (!options.isEmpty())
 			optionsString = ", " + options.stream().map(o -> "\"" + o.name() + "\"").collect(Collectors.joining(", "));
 
-		try {
-			if (createDetections) {
-				if (PixelClassifierTools.createDetectionsFromPixelClassifier(imageData, classifier, minSize, minHoleSize, optionsArray)) {
-					if (classifierName != null) {
-						imageData.getHistoryWorkflow().addStep(
-								new DefaultScriptableWorkflowStep("Pixel classifier create detections",
-										String.format("createDetectionsFromPixelClassifier(\"%s\", %s, %s)",
-												classifierName,
-												minSize,
-												minHoleSize + optionsString)
-										)
-								);
-					}
-					return true;
-				}
-			} else {
-				if (PixelClassifierTools.createAnnotationsFromPixelClassifier(imageData, classifier, minSize, minHoleSize, optionsArray)) {
-					if (classifierName != null) {
-						imageData.getHistoryWorkflow().addStep(
-								new DefaultScriptableWorkflowStep("Pixel classifier create annotations",
-										String.format("createAnnotationsFromPixelClassifier(\"%s\", %s, %s)",
-												classifierName,
-												minSize,
-												minHoleSize + optionsString)
-										)
-								);
-					}
-					return true;
-				}
-			}
+        try {
+            var step = classifierName == null ? null : new DefaultScriptableWorkflowStep(
+                    createDetections ? "Pixel classifier create detections" : "Pixel classifier create annotations",
+                    String.format("%s(\"%s\", %s, %s)",
+                            createDetections ? "createDetectionsFromPixelClassifier" : "createAnnotationsFromPixelClassifier",
+                            classifierName, minSize, minHoleSize + optionsString));
+            return BackgroundObjectCreation.run(imageData, classifier, createDetections,
+                    minSize, minHoleSize, step, optionsArray);
 		} catch (IOException e) {
 			Dialogs.showErrorMessage(title, e);
 			logger.error(e.getMessage(), e);
