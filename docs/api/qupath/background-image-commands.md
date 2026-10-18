@@ -134,3 +134,26 @@ The native JavaFX rendering check covers light/dark progress panels at 600 and
 1000 px, queue tables at 720 and 1090 px, all nine queue states, and hidden idle
 state. Additional tests exercise concurrent worker reporting, continued FX input,
 late reports, failures, and native save progress while newer annotations survive.
+
+## Project-list thumbnail reads
+
+A subsequent live recording at 14:56 UTC caught `ProjectTreeRowCell.updateItem`
+blocked inside `DefaultProjectImageEntry.getThumbnail` during project-list
+scrolling. The native thumbnail cache uses soft references, so a cache miss can
+read and decode a file during cell layout. The old missing-thumbnail callback
+also read a recycled cell and refreshed the tree from a worker thread.
+
+`ProjectEntryDisplayCache` now owns thumbnail reads/generation, saved-data checks,
+URI checks and tooltip summaries on a dedicated worker. It reuses the existing
+bounded, invalidation-aware `BackgroundCache`; only completion refreshes run on
+FX. Requests identify entries, not reusable cells. Display images use soft
+references, failed reads wait for a refresh, and obsolete requests cannot publish
+into a changed project. Hidden thumbnails skip pixel reads. Explicit thumbnail
+writes also use the existing I/O worker. Project/tree refresh invalidates display
+data; idle thumbnail workers expire after 30 seconds.
+
+The GUI suite now passes 49 tests, including stalled thumbnail reads while FX
+continues, entry identity, failure/retry and hidden thumbnails. A read-only native
+check loaded thumbnails and details for 12 real project entries in 0.90 seconds;
+the maximum sampled FX dispatch delay was 3.19 ms. The project checksum was
+unchanged. This timing is a sample on the local machine, not a latency guarantee.
