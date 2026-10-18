@@ -15,6 +15,9 @@ public final class ImageDataBranchUpdate {
         var destinations = ImageDataFingerprint.roots(target, ids);
         var sources = ImageDataFingerprint.roots(result, ids);
         var selection = target.getHierarchy().getSelectionModel();
+        var unfinished = new HashMap<UUID, PathObject>();
+        selection.getSelectedObjects().stream().filter(p -> !p.isRootObject() && p.getParent() == null)
+                .forEach(p -> unfinished.put(p.getID(), p));
         var selected = selection.getSelectedObjects().stream().map(PathObject::getID).toList();
         var primary = selection.getSelectedObject() == null ? null : selection.getSelectedObject().getID();
         // Prepare every branch before changing the live hierarchy.
@@ -29,6 +32,7 @@ public final class ImageDataBranchUpdate {
         target.getHierarchy().fireHierarchyChangedEvent(ImageDataBranchUpdate.class);
         var objects = new HashMap<UUID, PathObject>();
         ImageDataFingerprint.branch(target.getHierarchy().getRootObject()).forEach(p -> objects.put(p.getID(), p));
+        unfinished.forEach(objects::putIfAbsent);
         selection.setSelectedObjects(selected.stream().map(objects::get).filter(Objects::nonNull).toList(), objects.get(primary));
     }
 

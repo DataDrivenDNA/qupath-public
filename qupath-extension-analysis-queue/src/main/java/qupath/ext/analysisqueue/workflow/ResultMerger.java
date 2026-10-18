@@ -20,6 +20,9 @@ public final class ResultMerger {
         var destinations = SourceSignature.roots(target, input.regionIds());
         var sources = SourceSignature.roots(result, input.regionIds());
         var selection = target.getHierarchy().getSelectionModel();
+        var unfinished = new HashMap<UUID, PathObject>();
+        selection.getSelectedObjects().stream().filter(p -> !p.isRootObject() && p.getParent() == null)
+                .forEach(p -> unfinished.put(p.getID(), p));
         var selectedIds = selection.getSelectedObjects().stream().map(PathObject::getID).toList();
         var primaryId = selection.getSelectedObject() == null ? null : selection.getSelectedObject().getID();
         for (int i = 0; i < destinations.size(); i++) {
@@ -37,6 +40,7 @@ public final class ResultMerger {
         target.getHierarchy().fireHierarchyChangedEvent(ResultMerger.class);
         var objects = new HashMap<UUID, PathObject>();
         SourceSignature.branch(target.getHierarchy().getRootObject()).forEach(p -> objects.put(p.getID(), p));
+        unfinished.forEach(objects::putIfAbsent);
         var selected = selectedIds.stream().map(objects::get).filter(Objects::nonNull).toList();
         selection.setSelectedObjects(selected, objects.get(primaryId));
         target.setChanged(true);

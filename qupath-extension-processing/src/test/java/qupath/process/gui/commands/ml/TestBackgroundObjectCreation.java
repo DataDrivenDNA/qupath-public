@@ -37,13 +37,20 @@ class TestBackgroundObjectCreation {
             var job = submit(() -> BackgroundObjectCreation.run(fixture.data, delayed(classifier, entered, release),
                     false, 0, 0, null, message -> {}, temp.resolve("recovery")));
             var other = PathObjects.createAnnotationObject(ROIs.createRectangleROI(201,1,10,10));
+            var unfinished = PathObjects.createAnnotationObject(ROIs.createRectangleROI(215,1,10,10));
             try {
                 assertTrue(entered.await(10, TimeUnit.SECONDS));
-                submit(() -> { fixture.data.getHierarchy().addObject(other); other.setName("manual work"); return null; }).get(3, TimeUnit.SECONDS);
+                submit(() -> {
+                    fixture.data.getHierarchy().addObject(other); other.setName("manual work");
+                    fixture.data.getHierarchy().getSelectionModel().setSelectedObject(unfinished);
+                    return null;
+                }).get(3, TimeUnit.SECONDS);
             } finally { release.countDown(); }
             assertTrue(job.get(20, TimeUnit.SECONDS));
             assertTrue(fixture.data.getHierarchy().getAnnotationObjects().contains(other));
             assertEquals("manual work", other.getName());
+            assertSame(unfinished, fixture.data.getHierarchy().getSelectionModel().getSelectedObject());
+            assertNull(unfinished.getParent());
             var expected = ImageDataFingerprint.roots(reference.data(), fixture.ids()).getFirst();
             assertEquals(2, fixture.region.nChildObjects());
             assertEquals(expected.nChildObjects(), fixture.region.nChildObjects());
@@ -53,6 +60,21 @@ class TestBackgroundObjectCreation {
                 assertTrue(actual.isAnnotation());
             }
             assertFalse(Files.exists(temp.resolve("recovery")));
+        }
+    }
+
+    @Test void unfinishedSelectionCannotAccidentallyRunFullImageClassification() throws Exception {
+        try (var fixture = new Fixture(temp)) {
+            var unfinished = PathObjects.createAnnotationObject(ROIs.createRectangleROI(210,1,10,10));
+            var messages = new ArrayList<String>();
+            assertFalse(submit(() -> {
+                fixture.data.getHierarchy().getSelectionModel().setSelectedObject(unfinished);
+                return BackgroundObjectCreation.run(fixture.data, fixture.classifier(), false, 0, 0, null,
+                        messages::add, temp.resolve("recovery"));
+            }).get(10, TimeUnit.SECONDS));
+            assertSame(unfinished, fixture.data.getHierarchy().getSelectionModel().getSelectedObject());
+            assertEquals(1, fixture.data.getHierarchy().getAnnotationObjects().size());
+            assertFalse(messages.isEmpty());
         }
     }
 

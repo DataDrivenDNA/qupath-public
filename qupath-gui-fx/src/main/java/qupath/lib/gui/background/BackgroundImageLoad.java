@@ -39,7 +39,8 @@ public final class BackgroundImageLoad {
             this.viewer = viewer; this.source = source; this.token = token; this.unchanged = unchanged;
         }
         public boolean current() {
-            return requests.get(viewer) == token && viewer.getImageData() == source && unchanged.getAsBoolean();
+            return requests.get(viewer) == token && viewer.getImageData() == source
+                    && !ViewerEditGuard.isEditing(viewer) && unchanged.getAsBoolean();
         }
         /** Loader owns the returned server; abandoned results are closed on the worker. */
         public boolean load(Callable<ImageData<BufferedImage>> loader, BooleanSupplier contextCurrent, Path file) throws IOException {

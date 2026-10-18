@@ -59,6 +59,12 @@ public final class ImageDataSnapshot implements AutoCloseable {
     /** Call on FX, serialized with editor mutations. No geometry traversal or disk I/O. */
     public boolean unchanged() { return stamp.equals(stamp(source)); }
 
+    /** New outlines are selected before the drawing tool adds them to the hierarchy. */
+    public static boolean hasUncommittedObjects(ImageData<?> source) {
+        return source.getHierarchy().getSelectionModel().getSelectedObjects().stream()
+                .anyMatch(p -> !p.isRootObject() && p.getParent() == null);
+    }
+
     /** Cheap edit guard; capture and evaluate on the hierarchy's owner thread. */
     public static java.util.function.BooleanSupplier watch(ImageData<BufferedImage> source) {
         var before = stamp(source);

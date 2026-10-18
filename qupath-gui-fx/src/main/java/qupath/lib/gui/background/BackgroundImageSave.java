@@ -55,9 +55,10 @@ public final class BackgroundImageSave {
                 }
             }
         }, saved -> {
-            current.set(snapshot.unchanged());
+            current.set(snapshot.unchanged() && !ImageDataSnapshot.hasUncommittedObjects(source));
             if (saved != null) source.setLastSavedPath(saved.toString(), current.get());
             else if (current.get()) source.setChanged(false);
+            if (!current.get()) source.setChanged(true);
         });
         return current.get();
     }

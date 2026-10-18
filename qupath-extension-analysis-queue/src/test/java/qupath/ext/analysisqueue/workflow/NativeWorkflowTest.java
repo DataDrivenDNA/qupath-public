@@ -210,4 +210,44 @@ class NativeWorkflowTest {
             }
         }
     }
+
+    @Test void publishingPreservesAnUnfinishedOutlineAndLeavesItUnsaved() throws Exception {
+        try (var f = new NativeFixture(root.resolve("unfinished"), 80)) {
+            var directory = root.resolve("input");
+            new InputCapture().capture(f.project, f.data, List.of(f.region), Job.waiting("live", "Live"), directory);
+            var input = JsonFiles.read(directory.resolve("input.json"), AnalysisInput.class);
+            try (var result = PathIO.<BufferedImage>readImageData(directory.resolve("input.qpdata"))) {
+                new Synj1Analysis().run(result, f.ids(), PixelClassifiers.readClassifier(f.classifier()), p -> {});
+                var unfinished = PathObjects.createAnnotationObject(ROIs.createRectangleROI(220,0,10,10,ImagePlane.getDefaultPlane()));
+                f.data.getHierarchy().getSelectionModel().setSelectedObject(unfinished);
+                var editor = new EditorAccess() {
+                    public qupath.lib.projects.Project<BufferedImage> project() { return f.project; }
+                    public List<ImageData<BufferedImage>> openImages(AnalysisInput i) { return List.of(f.data); }
+                };
+                assertNull(new NativeResultPublisher(FxExecutor.direct(), editor).publish(input, result));
+                assertEquals(2, f.region.nChildObjects());
+                assertSame(unfinished, f.data.getHierarchy().getSelectionModel().getSelectedObject());
+                assertNull(unfinished.getParent());
+                assertTrue(f.data.isChanged());
+                try (var saved = f.entry.readImageData()) {
+                    assertEquals(3, saved.getHierarchy().getAnnotationObjects().size());
+                    assertEquals(2, SourceSignature.roots(saved, f.ids()).getFirst().nChildObjects());
+                }
+            }
+        }
+    }
+
+    @Test void startingAnOutlineDuringQueueCaptureKeepsItUnsaved() throws Exception {
+        try (var f = new NativeFixture(root.resolve("capture-stroke"), 80)) {
+            var capture = new InputCapture();
+            try (var frozen = capture.freeze(f.project, f.data, List.of(f.region), Job.preparing("stroke", "Stroke"), root.resolve("input"))) {
+                var unfinished = PathObjects.createAnnotationObject(ROIs.createRectangleROI(220,0,10,10,ImagePlane.getDefaultPlane()));
+                f.data.getHierarchy().getSelectionModel().setSelectedObject(unfinished);
+                capture.complete(frozen, FxExecutor.direct(), () -> true);
+                assertTrue(f.data.isChanged());
+                assertSame(unfinished, f.data.getHierarchy().getSelectionModel().getSelectedObject());
+                try (var saved = f.entry.readImageData()) { assertEquals(1, saved.getHierarchy().getAnnotationObjects().size()); }
+            }
+        }
+    }
 }

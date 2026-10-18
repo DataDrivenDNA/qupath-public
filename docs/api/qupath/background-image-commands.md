@@ -37,18 +37,26 @@ Reference: [JavaFX 25 Platform API](https://openjfx.io/javadoc/25/javafx.graphic
   version are still current. Abandoned servers are closed on the worker.
 - Save-before-close, image changes and project changes recheck viewer identity
   and edits after background work. A failed save cannot authorize closing.
+- An unfinished outline lives outside the hierarchy until mouse release. Loads,
+  closes and undo cannot discard it. Native and queue publication preserve its
+  selected object identity, and a save cannot mark the unfinished stroke clean.
 - Object creation runs on a private snapshot. Unchanged target branches receive
   results while unrelated annotations and current selection survive. If an image
   was closed, its latest saved data is read and checked before publishing.
 - Changed or reopened targets retain their current work. Completed results are
   saved separately under the QuPath user directory's `background-results/`, and
   the error identifies that recovery file. Duplicate jobs for an image are blocked.
-- Native undo history and viewer repaint remain separate responsibilities.
+- Undo history uses the same owner-thread snapshot boundary. Its serialization
+  runs on the I/O worker. Pending records retain the configured undo depth;
+  obsolete records and closed viewers cannot recreate cleared history. Undo and
+  redo decode on the worker, then commit only if the image and edits remain
+  unchanged. A second undo waits until the first finishes; drawing stays enabled.
+  Viewer repaint remains a separate responsibility.
 
 ## Verification
 
-The initial verification passed 30 GUI tests, 4 processing tests, 15 queue tests,
-and the native geometry serialization regression (nine geometry forms).
+Final verification passed 40 GUI tests, 5 processing tests, 17 queue tests,
+and the native geometry serialization regression (nine geometry forms): 63 tests.
 Tests include worker stalls with live FX callbacks, concurrent edits, ordered
 saves, external file replacement, failed saves, load supersession, abandoned
 server closure, full-image detections, selection, recovery, and closed-image
@@ -61,6 +69,19 @@ save retained it. Background save took 0.97 s and load 4.62 s; the original file
 SHA-256 and all original branch fingerprints, including 0.50 µm DAB values,
 were unchanged. The full check took 32.07 s. The load still exposed a 1.18 s FX
 pause in undo history initialization, motivating a separate undo-history fix.
+
+After moving undo serialization to the worker, the same native check retained
+the concurrent edit and exact original fingerprints. Saving while annotating
+took 1.84 s including pending history work, with a maximum FX callback delay of
+0.31 ms. The next save took 2.24 s, with 0.57 ms maximum FX delay. Loading took
+4.87 s, with 0.46 s maximum FX delay during viewer initialization. The complete
+check took 21.17 s; filesystem caches were warm, so overall runtime is not a
+cold-cache comparison. The original 245,892,976-byte file remained unchanged.
+
+Final verification adds undo ordering, redo invalidation, edits during pending
+undo, disposal, bounded pending history, two viewers sharing one hierarchy, and
+unfinished strokes during loading, saving, undo, native segmentation, queue
+capture and queue publication.
 
 No desktop keyboard, pointer or foreground activation was used. These checks do
 not claim that rendering arbitrary complex geometry can never cause a pause.

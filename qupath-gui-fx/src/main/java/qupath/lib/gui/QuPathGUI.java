@@ -26,6 +26,7 @@ package qupath.lib.gui;
 import qupath.lib.gui.background.BackgroundTasks;
 import qupath.lib.gui.background.BackgroundImageSave;
 import qupath.lib.gui.background.BackgroundImageLoad;
+import qupath.lib.gui.background.ViewerEditGuard;
 
 import com.google.common.collect.BiMap;
 import com.google.common.collect.HashBiMap;
@@ -2616,7 +2617,8 @@ public class QuPathGUI {
 		
 		if (getProject() != currentProject || !viewersToClose.equals(List.copyOf(getAllViewers()))) return;
         for (var viewer : closing.keySet())
-            if (viewer.getImageData() != closing.get(viewer) || !guards.get(viewer).getAsBoolean()) return;
+            if (viewer.getImageData() != closing.get(viewer) || ViewerEditGuard.isEditing(viewer)
+                    || !guards.get(viewer).getAsBoolean()) return;
         closing.keySet().forEach(QuPathViewer::resetImageData);
 
         // Store in recent list, if needed
@@ -2730,7 +2732,7 @@ public class QuPathGUI {
 			if (!isReadOnly() && !promptToSaveChangesOrCancel(dialogTitle, imageData))
 				return false;
 		}
-		if (viewer.getImageData() != imageData) return false;
+		if (viewer.getImageData() != imageData || ViewerEditGuard.isEditing(viewer)) return false;
 		viewer.resetImageData();
 		return true;
 	}

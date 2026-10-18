@@ -4,6 +4,7 @@ package qupath.ext.analysisqueue.qupath;
 import qupath.ext.analysisqueue.workflow.*;
 import qupath.lib.gui.QuPathGUI;
 import qupath.lib.images.ImageData;
+import qupath.lib.images.ImageDataSnapshot;
 import qupath.lib.io.PathIO;
 import qupath.lib.projects.Project;
 import qupath.lib.projects.ProjectIO;
@@ -58,7 +59,9 @@ public final class NativeResultPublisher implements ResultPublisher {
                     prepared.commit();
                     if (snapshot != null) {
                         ResultMerger.applyVerified(snapshot.source(), candidate, input);
-                        snapshot.source().setLastSavedPath(prepared.targetPath().toString(), true);
+                        boolean complete = !ImageDataSnapshot.hasUncommittedObjects(snapshot.source());
+                        snapshot.source().setLastSavedPath(prepared.targetPath().toString(), complete);
+                        if (!complete) snapshot.source().setChanged(true);
                     }
                     savedProject.syncChanges();
                     return null;

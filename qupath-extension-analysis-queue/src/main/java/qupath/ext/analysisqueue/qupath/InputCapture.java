@@ -6,6 +6,7 @@ import qupath.ext.analysisqueue.persistence.JsonFiles;
 import qupath.ext.analysisqueue.queue.Job;
 import qupath.ext.analysisqueue.workflow.*;
 import qupath.lib.images.ImageData;
+import qupath.lib.images.ImageDataSnapshot;
 import qupath.lib.io.PathIO;
 import qupath.lib.objects.PathObject;
 import qupath.lib.projects.Project;
@@ -65,7 +66,9 @@ public final class InputCapture {
                 // Switching slides may trigger a normal save. Verify it on the worker.
                 if (!prepared.sourceUnchanged()) return false;
                 prepared.commit();
-                frozen.snapshot().source().setLastSavedPath(prepared.targetPath().toString(), true);
+                boolean complete = !ImageDataSnapshot.hasUncommittedObjects(frozen.snapshot().source());
+                frozen.snapshot().source().setLastSavedPath(prepared.targetPath().toString(), complete);
+                if (!complete) frozen.snapshot().source().setChanged(true);
                 project.syncChanges();
                 return true;
             });

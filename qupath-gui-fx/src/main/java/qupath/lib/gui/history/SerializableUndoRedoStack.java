@@ -8,13 +8,13 @@
  * it under the terms of the GNU General Public License as
  * published by the Free Software Foundation, either version 3 of the
  * License, or (at your option) any later version.
- * 
+ *
  * QuPath is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- * 
- * You should have received a copy of the GNU General Public License 
+ *
+ * You should have received a copy of the GNU General Public License
  * along with QuPath.  If not, see <https://www.gnu.org/licenses/>.
  * #L%
  */
@@ -36,157 +36,84 @@ import java.util.Deque;
  */
 public class SerializableUndoRedoStack<T> {
     private static final Logger logger = LoggerFactory.getLogger(SerializableUndoRedoStack.class);
-	
-	private byte[] current = null;
-	private Deque<byte[]> undoStack = new ArrayDeque<>();
-	private Deque<byte[]> redoStack = new ArrayDeque<>();
-	
-	public SerializableUndoRedoStack(T object) {
-		if (object != null)
-			current = serialize(object, 1024);
-	}
-	
-	/**
-	 * Returns true if the undo stack is not empty.
-	 * @return
-	 */
-	public boolean canUndo() {
-		return !undoStack.isEmpty();
-	}
-	
-	/**
-	 * Returns true if the redo stack is not empty.
-	 * @return
-	 */
-	public boolean canRedo() {
-		return !redoStack.isEmpty();
-	}
-	
-	/**
-	 * Get the total number of allocated bytes.
-	 * @return
-	 */
-	public synchronized long totalBytes() {
-		long total = 0L;
-		if (current != null)
-			total = current.length;
-		for (byte[] bytes : undoStack)
-			total += bytes.length;
-		for (byte[] bytes : redoStack)
-			total += bytes.length;
-		return total;
-	}
-	
-	/**
-	 * Clear the undo and redo stacks, in addition to the current bytes.
-	 */
-	public synchronized void clear() {
-		current = null;
-		undoStack.clear();
-		redoStack.clear();
-	}
-	
-	/**
-	 * Request redo once, updating the current (serialized) object, 
-	 * and return the deserialized version of the object at the top of the 'redo' stack.
-	 * @return
-	 */
-	public synchronized T redoOnce() {
-		if (redoStack.isEmpty()) {
-			logger.debug("Cannot redo! Stack is empty.");
-			return null;
-		}
-		if (current != null) {
-			undoStack.push(current);
-		}
-		current = redoStack.pop();
-		return deserialize(current);
-	}
-	
-	/**
-	 * Request undo once, updating the current (serialized) object, 
-	 * and return the deserialized version of the object at the top of the 'undo' stack.
-	 * @return
-	 */
-	public synchronized T undoOnce() {
-		if (undoStack.isEmpty()) {
-			logger.debug("Cannot undo! Stack is empty.");
-			return null;
-		}
-		if (current != null) {
-			redoStack.push(current);
-		}
-		current = undoStack.pop();
-		return deserialize(current);
-	}
-	
-	/**
-	 * Record a new change event, updating the current object.
-	 * This will clear any redo status, on the assumption that redo is no longer possible.
-	 * 
-	 * @param object
-	 * @param historySize
-	 */
-	public synchronized void addLatest(final T object, int historySize) {
-		int initialSize = 1024;
-		if (current != null) {
-			// If we are low on memory, clear the undo stack
-			long remainingMemory = GeneralTools.estimateAvailableMemory();
-			if (remainingMemory < current.length * 1.5) {
-				undoStack.clear();
-			} else {
-				// Default to something a bit bigger than the last things we had
-				initialSize = Math.min(Integer.MAX_VALUE-64, (int)(current.length * 1.1));
-				undoStack.push(current);
-			}
-		}
-		current = serialize(object, initialSize);
-		// Reset the ability to redo
-		redoStack.clear();
-		// Check the history size
-		if (historySize > 0) {
-			while (undoStack.size() > historySize)
-				undoStack.pollLast();
-		}
-	}
-	
-	/**
-	 * Serialize an object to an array of bytes.
-	 * Providing an estimate of the initial array size can help performance.
-	 * 
-	 * @param object
-	 * @param initialSize
-	 * @return
-	 */
-	private byte[] serialize(T object, int initialSize) {
-		try (ByteArrayOutputStream stream = new ByteArrayOutputStream(initialSize)) {
-			ObjectOutputStream out = new ObjectOutputStream(stream);
-			out.writeObject(object);
-			out.flush();
-			return stream.toByteArray();
-		} catch (IOException e) {
-			logger.error("Error serializing " + object, e);
-			return null;
-		}
-	}
-	
-	/**
-	 * Deserialize an object from an array of bytes.
-	 * It's assumed at the object is of the generic type used elsewhere in this class.
-	 * 
-	 * @param bytes
-	 * @return
-	 */
-	@SuppressWarnings("unchecked")
-	private T deserialize(byte[] bytes) {
-		try (ByteArrayInputStream stream = new ByteArrayInputStream(bytes)) {
-			ObjectInputStream in = PathIO.createObjectInputStream(stream);
-			return (T)in.readObject();
-		} catch (ClassNotFoundException | IOException e) {
-			logger.error("Error deserializing object", e);
-			return null;
-		}
-	}
-	
-}
+    private byte[] current;
+    private final Deque<byte[]> undoStack = new ArrayDeque<>();
+    private final Deque<byte[]> redoStack = new ArrayDeque<>();
 
+    public SerializableUndoRedoStack(T object) {
+        if (object != null) current = serializeObject(object, 1024);
+    }
+    public synchronized boolean canUndo() { return !undoStack.isEmpty(); }
+    public synchronized boolean canRedo() { return !redoStack.isEmpty(); }
+    synchronized int undoCount() { return undoStack.size(); }
+    synchronized int redoCount() { return redoStack.size(); }
+    synchronized int initialSize() {
+        return current == null ? 1024 : (int)Math.min(Integer.MAX_VALUE - 64L, (long)(current.length * 1.1));
+    }
+    public synchronized long totalBytes() {
+        long total = current == null ? 0 : current.length;
+        for (var bytes : undoStack) total += bytes.length;
+        for (var bytes : redoStack) total += bytes.length;
+        return total;
+    }
+    public synchronized void clear() { current = null; undoStack.clear(); redoStack.clear(); }
+
+    public T undoOnce() { return moveNow(false); }
+    public T redoOnce() { return moveNow(true); }
+    private T moveNow(boolean redo) {
+        var move = prepareMove(redo);
+        if (move == null) return null;
+        T object = move.readObject();
+        return object != null && commitMove(move) ? object : null;
+    }
+
+    public void addLatest(T object, int historySize) {
+        addSerialized(serializeObject(object, initialSize()), historySize);
+    }
+    /** Only byte-array bookkeeping; serialization is completed before this lock. */
+    synchronized void addSerialized(byte[] bytes, int historySize) {
+        if (bytes == null) return;
+        if (current != null) {
+            if (GeneralTools.estimateAvailableMemory() < current.length * 1.5) undoStack.clear();
+            else undoStack.push(current);
+        }
+        current = bytes;
+        redoStack.clear();
+        if (historySize > 0) while (undoStack.size() > historySize) undoStack.pollLast();
+    }
+
+    /** Prepare without mutating history; decode on a worker, then commit if still current. */
+    synchronized Move<T> prepareMove(boolean redo) {
+        var target = (redo ? redoStack : undoStack).peek();
+        return target == null ? null : new Move<>(current, target, redo);
+    }
+    synchronized boolean commitMove(Move<T> move) {
+        var from = move.redo ? redoStack : undoStack;
+        var to = move.redo ? undoStack : redoStack;
+        if (current != move.previous || from.peek() != move.target) return false;
+        from.pop();
+        if (current != null) to.push(current);
+        current = move.target;
+        return true;
+    }
+    static final class Move<T> {
+        private final byte[] previous, target;
+        private final boolean redo;
+        private Move(byte[] previous, byte[] target, boolean redo) {
+            this.previous = previous; this.target = target; this.redo = redo;
+        }
+        T readObject() { return deserialize(target); }
+    }
+
+    static byte[] serializeObject(Object object, int initialSize) {
+        try (var stream = new ByteArrayOutputStream(initialSize); var out = new ObjectOutputStream(stream)) {
+            out.writeObject(object); out.flush(); return stream.toByteArray();
+        } catch (IOException error) { logger.error("Error serializing undo history", error); return null; }
+    }
+    @SuppressWarnings("unchecked")
+    private static <T> T deserialize(byte[] bytes) {
+        try (var stream = new ByteArrayInputStream(bytes); var in = PathIO.createObjectInputStream(stream)) {
+            return (T)in.readObject();
+        } catch (ClassNotFoundException | IOException error) { logger.error("Error reading undo history", error); return null; }
+    }
+}

@@ -38,6 +38,10 @@ final class BackgroundObjectCreation {
                        boolean detections, double minArea, double minHoleArea, WorkflowStep step,
                        java.util.function.Consumer<String> notification, Path recoveryDirectory,
                        CreateObjectOptions... options) throws IOException {
+        if (ImageDataSnapshot.hasUncommittedObjects(source)) {
+            notification.accept("Finish drawing the outline before creating objects.");
+            return false;
+        }
         var gui = QuPathGUI.getInstance();
         var project = gui == null ? null : gui.getProject();
         var entry = project == null ? null : project.getEntry(source);

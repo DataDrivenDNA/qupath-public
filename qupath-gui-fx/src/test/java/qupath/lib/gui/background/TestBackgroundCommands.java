@@ -23,6 +23,18 @@ import static org.junit.jupiter.api.Assertions.*;
 class TestBackgroundCommands {
     @TempDir Path temp;
 
+    @Test void saveDoesNotMarkAnUnfinishedOutlineAsSaved() throws Exception {
+        try (var fixture = new Fixture(temp)) {
+            var outline = PathObjects.createAnnotationObject(ROIs.createRectangleROI(20,20,5,5));
+            FxTestTools.call(() -> { fixture.data.getHierarchy().getSelectionModel().setSelectedObject(outline); return null; });
+            assertFalse(submit(() -> BackgroundImageSave.save(fixture.data, fixture.entry, null)).get(10, TimeUnit.SECONDS));
+            assertTrue(fixture.data.isChanged());
+            assertSame(outline, fixture.data.getHierarchy().getSelectionModel().getSelectedObject());
+            assertNull(outline.getParent());
+            try (var saved = fixture.entry.readImageData()) { assertEquals(1, saved.getHierarchy().getAnnotationObjects().size()); }
+        }
+    }
+
     @Test void analysisAndIoKeepDispatchingFxEventsAndPropagateFailure() throws Exception {
         FxTestTools.start();
         var entered = new CountDownLatch(1);

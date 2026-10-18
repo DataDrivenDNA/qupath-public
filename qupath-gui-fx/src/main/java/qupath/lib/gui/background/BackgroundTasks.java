@@ -30,6 +30,8 @@ public final class BackgroundTasks {
     public static <T> T analysis(Callable<T> work) throws IOException {
         return run(ANALYSIS, work, result -> {});
     }
+    /** Enqueue independently owned I/O work; callers own completion and failure handling. */
+    public static void submitIO(Runnable work) { IO.execute(work); }
 
     /** Completion runs on FX before a later queued command can update its UI state. */
     static <T> T run(Executor executor, Callable<T> work, Consumer<T> completed) throws IOException {

@@ -19,6 +19,27 @@ import static org.junit.jupiter.api.Assertions.*;
 class TestBackgroundImageLoad {
     @TempDir Path temp;
 
+    @Test void startingAnOutlineDuringLoadPreservesTheUncommittedStroke() throws Exception {
+        try (var fixture = new ViewerFixture()) {
+            var entered = new CountDownLatch(1); var release = new CountDownLatch(1);
+            var closed = new AtomicBoolean();
+            var outline = PathObjects.createAnnotationObject(ROIs.createRectangleROI(2,2,8,8));
+            var task = TestBackgroundCommands.submit(() -> fixture.loads.begin(fixture.viewer).load(() -> {
+                entered.countDown(); assertTrue(release.await(10, TimeUnit.SECONDS));
+                return data("abandoned", closed);
+            }, () -> true, null));
+            try {
+                assertTrue(entered.await(5, TimeUnit.SECONDS));
+                FxTestTools.call(() -> { fixture.viewer.setSelectedObject(outline); return null; });
+            } finally { release.countDown(); }
+            assertFalse(task.get(10, TimeUnit.SECONDS));
+            assertSame(fixture.source, fixture.viewer.getImageData());
+            assertSame(outline, fixture.source.getHierarchy().getSelectionModel().getSelectedObject());
+            assertNull(outline.getParent());
+            assertTrue(closed.get());
+        }
+    }
+
     @Test void editingDuringLoadKeepsCurrentImageAndClosesAbandonedServer() throws Exception {
         try (var fixture = new ViewerFixture()) {
             var entered = new CountDownLatch(1);
