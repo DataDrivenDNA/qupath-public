@@ -29,12 +29,11 @@ import javafx.beans.value.ChangeListener;
 import javafx.beans.value.ObservableValue;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import qupath.lib.common.GeneralTools;
+import qupath.lib.gui.history.SerializableUndoRedoStack;
 import qupath.lib.gui.prefs.PathPrefs;
 import qupath.lib.gui.viewer.QuPathViewer;
 import qupath.lib.gui.viewer.QuPathViewerListener;
 import qupath.lib.images.ImageData;
-import qupath.lib.io.PathIO;
 import qupath.lib.objects.PathObject;
 import qupath.lib.objects.hierarchy.PathObjectHierarchy;
 import qupath.lib.objects.hierarchy.events.PathObjectHierarchyEvent;
@@ -43,13 +42,6 @@ import qupath.lib.plugins.ParallelTileObject;
 
 import java.awt.Shape;
 import java.awt.image.BufferedImage;
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.ObjectInputStream;
-import java.io.ObjectOutputStream;
-import java.util.ArrayDeque;
-import java.util.Deque;
 import java.util.Map;
 import java.util.WeakHashMap;
 
@@ -267,165 +259,6 @@ public class UndoRedoManager implements ChangeListener<QuPathViewer>, QuPathView
 	
 
 	
-	/**
-	 * Serialize objects on request for use in undo/redo.
-	 *
-	 * @param <T>
-	 */
-	static class SerializableUndoRedoStack<T> {
-		
-		private byte[] current = null;
-		private Deque<byte[]> undoStack = new ArrayDeque<>();
-		private Deque<byte[]> redoStack = new ArrayDeque<>();
-		
-		SerializableUndoRedoStack(T object) {
-			if (object != null)
-				current = serialize(object, 1024);
-		}
-		
-		/**
-		 * Returns true if the undo stack is not empty.
-		 * @return
-		 */
-		public boolean canUndo() {
-			return !undoStack.isEmpty();
-		}
-		
-		/**
-		 * Returns true if the redo stack is not empty.
-		 * @return
-		 */
-		public boolean canRedo() {
-			return !redoStack.isEmpty();
-		}
-		
-		/**
-		 * Get the total number of allocated bytes.
-		 * @return
-		 */
-		public synchronized long totalBytes() {
-			long total = 0L;
-			if (current != null)
-				total = current.length;
-			for (byte[] bytes : undoStack)
-				total += bytes.length;
-			for (byte[] bytes : redoStack)
-				total += bytes.length;
-			return total;
-		}
-		
-		/**
-		 * Clear the undo and redo stacks, in addition to the current bytes.
-		 */
-		public synchronized void clear() {
-			current = null;
-			undoStack.clear();
-			redoStack.clear();
-		}
-		
-		/**
-		 * Request redo once, updating the current (serialized) object, 
-		 * and return the deserialized version of the object at the top of the 'redo' stack.
-		 * @return
-		 */
-		public synchronized T redoOnce() {
-			if (redoStack.isEmpty()) {
-				logger.debug("Cannot redo! Stack is empty.");
-				return null;
-			}
-			if (current != null) {
-				undoStack.push(current);
-			}
-			current = redoStack.pop();
-			return deserialize(current);
-		}
-		
-		/**
-		 * Request undo once, updating the current (serialized) object, 
-		 * and return the deserialized version of the object at the top of the 'undo' stack.
-		 * @return
-		 */
-		public synchronized T undoOnce() {
-			if (undoStack.isEmpty()) {
-				logger.debug("Cannot undo! Stack is empty.");
-				return null;
-			}
-			if (current != null) {
-				redoStack.push(current);
-			}
-			current = undoStack.pop();
-			return deserialize(current);
-		}
-		
-		/**
-		 * Record a new change event, updating the current object.
-		 * This will clear any redo status, on the assumption that redo is no longer possible.
-		 * 
-		 * @param object
-		 * @param historySize
-		 */
-		public synchronized void addLatest(final T object, int historySize) {
-			int initialSize = 1024;
-			if (current != null) {
-				// If we are low on memory, clear the undo stack
-				long remainingMemory = GeneralTools.estimateAvailableMemory();
-				if (remainingMemory < current.length * 1.5) {
-					undoStack.clear();
-				} else {
-					// Default to something a bit bigger than the last things we had
-					initialSize = Math.min(Integer.MAX_VALUE-64, (int)(current.length * 1.1));
-					undoStack.push(current);
-				}
-			}
-			current = serialize(object, initialSize);
-			// Reset the ability to redo
-			redoStack.clear();
-			// Check the history size
-			if (historySize > 0) {
-				while (undoStack.size() > historySize)
-					undoStack.pollLast();
-			}
-		}
-		
-		/**
-		 * Serialize an object to an array of bytes.
-		 * Providing an estimate of the initial array size can help performance.
-		 * 
-		 * @param object
-		 * @param initialSize
-		 * @return
-		 */
-		private byte[] serialize(T object, int initialSize) {
-			try (ByteArrayOutputStream stream = new ByteArrayOutputStream(initialSize)) {
-				ObjectOutputStream out = new ObjectOutputStream(stream);
-				out.writeObject(object);
-				out.flush();
-				return stream.toByteArray();
-			} catch (IOException e) {
-				logger.error("Error serializing " + object, e);
-				return null;
-			}
-		}
-		
-		/**
-		 * Deserialize an object from an array of bytes.
-		 * It's assumed at the object is of the generic type used elsewhere in this class.
-		 * 
-		 * @param bytes
-		 * @return
-		 */
-		@SuppressWarnings("unchecked")
-		private T deserialize(byte[] bytes) {
-			try (ByteArrayInputStream stream = new ByteArrayInputStream(bytes)) {
-				ObjectInputStream in = PathIO.createObjectInputStream(stream);
-				return (T)in.readObject();
-			} catch (ClassNotFoundException | IOException e) {
-				logger.error("Error deserializing object", e);
-				return null;
-			}
-		}
-		
-	}
 
 
 
