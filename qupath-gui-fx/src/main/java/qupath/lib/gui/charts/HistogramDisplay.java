@@ -251,7 +251,7 @@ public class HistogramDisplay implements ParameterChangeListener {
 
 	void setHistogram(final PathTableData<?> model, final String columnName) {
 		if (model != null && model.getMeasurementNames().contains(columnName)) {
-			double[] values = model.getDoubleValues(columnName);
+			double[] values = model.getDoubleValuesForDisplay(columnName);
 			int nBins = paramsHistogram.getIntParameterValue("nBins");
 			if (nBins < 2)
 				nBins = 2;

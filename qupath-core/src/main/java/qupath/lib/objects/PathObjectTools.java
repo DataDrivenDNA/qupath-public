@@ -831,13 +831,31 @@ public class PathObjectTools {
 	 */
 	public static Collection<PathObject> getObjectsForLocation(final PathObjectHierarchy hierarchy, 
 			final double x, final double y, final int zPos, final int tPos, double vertexDistance) {
+		return getObjectsForLocation(hierarchy, null, x, y, zPos, tPos, vertexDistance);
+	}
+
+	/**
+	 * Find objects of a requested type at a pixel location. Filtering before exact
+	 * containment avoids constructing expensive geometry indexes for irrelevant ROIs.
+	 * @param hierarchy hierarchy to query
+	 * @param objectType requested type including subclasses, or null for all objects
+	 * @param x image x coordinate
+	 * @param y image y coordinate
+	 * @param zPos z slice
+	 * @param tPos time point
+	 * @param vertexDistance tolerance for non-area ROIs, or a negative value to exclude them
+	 * @return matching objects
+	 */
+	public static Collection<PathObject> getObjectsForLocation(final PathObjectHierarchy hierarchy,
+			final Class<? extends PathObject> objectType, final double x, final double y,
+			final int zPos, final int tPos, double vertexDistance) {
 			if (hierarchy == null)
 				return Collections.emptyList();
 			Set<PathObject> pathObjects = new HashSet<>(8);
 			// Introduce searchWidth to address https://github.com/qupath/qupath/issues/1552 -
 			// previously points were often missed
 			int searchWidth = (int)Math.ceil(Math.max(vertexDistance * 2, 2));
-			hierarchy.getAllObjectsForRegion(ImageRegion.createInstance(
+			hierarchy.getObjectsForRegion(objectType, ImageRegion.createInstance(
 					(int)(x - searchWidth/2),
 					(int)(y - searchWidth/2),
 					searchWidth,

@@ -32,6 +32,7 @@ import javafx.scene.layout.Region;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import qupath.lib.gui.panes.ProjectBrowser;
+import qupath.lib.gui.background.BackgroundProgressPane;
 
 /**
  * Inelegantly named class to manage the main components of the main QuPath window.
@@ -70,6 +71,7 @@ class QuPathMainPaneManager {
 		SplitPane.setResizableWithParent(mainViewerPane, Boolean.TRUE);
 		
 		pane.setCenter(splitPane);
+		pane.setBottom(new BackgroundProgressPane());
 		
 		toolbar = new ToolBarComponent(
 				qupath.getToolManager(),

@@ -1,3 +1,17 @@
+## Local fixes (2026-10-18)
+
+* Preserve native geometry coordinates when reopening saved annotations; prevent queue verification failures caused by 0.01-pixel grid snapping.
+
+* Avoid building whole-tissue containment indexes for cursor classification text, which only displays detections. Preserve annotation hit testing for selection.
+* Move queue input saving, fingerprints, result serialization and readback verification off the JavaFX thread. Publish prepared native files after checking for newer saves or live edits; show Preparing and recover incomplete inputs safely.
+* Record UI stalls exceeding one second with bounded JavaFX stack samples and recovery durations. Avoid geometry hashing in the recorder's annotation cache.
+* Add a persistent SYNJ1 analysis queue: outline regions, then run native threshold-220 segmentation, 0.5 µm DAB and tissue/empty measurements, verified saving and CSV export sequentially in the background, with a non-modal queue window and protection for later manual edits.
+* Complete the SYNJ1 workflow with persistent tissue/empty classifier percentages and areas, full annotation exports, and a companion command that preserves existing DAB measurements.
+* Add a reusable SYNJ1 project script to measure existing tissue annotations at 0.5 µm, save with native readback verification, and export full-precision DAB results.
+* Add an optional Session Recorder extension with automatic startup, local workflow/action logs, annotation geometry and measurement history, and activity-based QuPath snapshots. Include start/stop controls and explicit capture/storage failure records.
+* Notify a stable snapshot of hierarchy listeners, allowing live measurement refreshes to register or remove listeners without interrupting annotation creation or unlocking.
+* Add regression coverage for listener changes, real measurement-table refreshes during annotation workflows, annotation save/reload, and localized half-micron intensity inputs reaching the actual image reads.
+
 ## Version 0.8.0 (IN PROGRESS!)
 
 ### Enhancements

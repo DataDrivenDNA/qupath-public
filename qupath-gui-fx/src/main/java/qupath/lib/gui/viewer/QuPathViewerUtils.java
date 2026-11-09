@@ -13,6 +13,7 @@ import qupath.lib.images.servers.ImageServer;
 import qupath.lib.images.servers.ImageServerMetadata;
 import qupath.lib.images.servers.PixelCalibration;
 import qupath.lib.objects.PathObject;
+import qupath.lib.objects.PathDetectionObject;
 import qupath.lib.objects.PathObjectTools;
 import qupath.lib.objects.TMACoreObject;
 import qupath.lib.objects.classes.PathClass;
@@ -198,7 +199,7 @@ class QuPathViewerUtils {
     static String getImageObjectClassificationString(PathObjectHierarchy hierarchy, double x, double y, ImagePlane plane) {
         if (hierarchy == null)
             return "";
-        var pathObjects = PathObjectTools.getObjectsForLocation(hierarchy,
+        var pathObjects = PathObjectTools.getObjectsForLocation(hierarchy, PathDetectionObject.class,
                 x, y,
                 plane.getZ(),
                 plane.getT(),

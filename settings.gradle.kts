@@ -48,6 +48,9 @@ gradle.extra["qupath.package.git-commit"] = providers.gradleProperty("git-commit
 // Main application
 include("qupath-app")
 
+// Exact upstream performance backport; remove after upgrading JTS past #1173.
+includeBuild("jts-overlay-backport")
+
 // Core modules
 include("qupath-core")
 include("qupath-core-processing")
@@ -58,6 +61,8 @@ include("qupath-extension-processing")
 
 // Extra extensions
 include("qupath-extension-svg")
+include("qupath-extension-recorder")
+include("qupath-extension-analysis-queue")
 include("qupath-extension-script-editor")
 include("qupath-extension-openslide")
 include("qupath-extension-bioformats")

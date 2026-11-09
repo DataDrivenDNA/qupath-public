@@ -45,10 +45,7 @@ import qupath.lib.objects.PathObjectTools;
 import qupath.lib.objects.hierarchy.PathObjectHierarchy;
 import qupath.lib.regions.ImageRegion;
 import qupath.lib.regions.RegionRequest;
-import qupath.lib.roi.EllipseROI;
-import qupath.lib.roi.LineROI;
 import qupath.lib.roi.ROIs;
-import qupath.lib.roi.RectangleROI;
 import qupath.lib.roi.interfaces.ROI;
 
 import java.awt.AlphaComposite;
@@ -68,7 +65,6 @@ import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
-import java.util.WeakHashMap;
 import java.util.concurrent.ConcurrentHashMap;
 
 
@@ -93,9 +89,6 @@ public class HierarchyOverlay extends AbstractOverlay {
 	private int lastPointRadius = PathPrefs.pointRadiusProperty().get();
 	
 	private Font font = new Font("SansSerif", Font.BOLD, 10);
-
-	// Map of points around which names should be displayed, to avoid frequent searches
-	private final Map<ROI, Point2> nameConnectionPointMap = Collections.synchronizedMap(new WeakHashMap<>());
 
 	// Map of colors to use for displaying names, to avoid generating new color objects too often
 	private final Map<Integer, Color> nameColorMap = new ConcurrentHashMap<>();
@@ -358,7 +351,7 @@ public class HierarchyOverlay extends AbstractOverlay {
 					var bounds = metrics.getStringBounds(name, g2d);
 
 					// Find a point to connect to within the ROI
-					Point2 point = nameConnectionPointMap.computeIfAbsent(roi, this::findNamePointForROI);
+					Point2 point = AnnotationLabelCache.get(roi);
 					if (point == null) {
 						logger.trace("No suitable point found for roi {}", roi);
 						continue;
@@ -429,50 +422,6 @@ public class HierarchyOverlay extends AbstractOverlay {
 		);
 	}
 
-	/**
-	 * Find a point around which to display an object's name, if required.
-	 * @param roi the ROI
-	 * @return a suitable point, or null if no point could be found
-	 */
-	private Point2 findNamePointForROI(ROI roi) {
-		double x = getTargetNamePointX(roi);
-		double y = getTargetNamePointY(roi);
-		if (Double.isNaN(x) || Double.isNaN(y) || roi.isEmpty())
-			return null;
-		if (roi instanceof RectangleROI || roi instanceof EllipseROI) {
-			// Use top centre for rectangle and ellipses
-			return new Point2(x, y);
-		} else if (roi instanceof LineROI) {
-			// Use centroids for lines (2 points only)
-			return new Point2(roi.getCentroidX(), roi.getCentroidY());
-		} else {
-			Point2 target = new Point2(x, y);
-			return roi.getAllPoints().stream()
-					.filter(p -> Math.abs(p.getY() - target.getY()) < 1e-3)
-					.min(Comparator.comparingDouble(p -> p.distanceSq(target)))
-					.orElse(null);
-		}
-	}
-
-	/*
-	 * Get the x-coordinate corresponding to where we'd like the name to be displayed
-	 * (close to the ROI center).
-	 */
-	private static double getTargetNamePointX(ROI roi) {
-		double x = roi.getCentroidX();
-		if (Double.isFinite(x))
-			return x;
-		return roi.getBoundsX() + roi.getBoundsWidth() / 2.0;
-	}
-
-	/*
-	 * Get the x-coordinate corresponding to where we'd like the name to be displayed
-	 * (close to the top).
-	 */
-	private static double getTargetNamePointY(ROI roi) {
-		return roi.getBoundsY();
-	}
-	
 	/**
 	 * Clear previously-cached tiles for this overlay.
 	 */

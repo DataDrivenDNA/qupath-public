@@ -32,6 +32,7 @@ import javafx.beans.property.SimpleObjectProperty;
 import javafx.beans.value.ObservableValue;
 import javafx.collections.ListChangeListener;
 import javafx.collections.transformation.SortedList;
+import javafx.concurrent.Task;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
@@ -71,6 +72,7 @@ import qupath.fx.dialogs.Dialogs;
 import qupath.fx.dialogs.FileChoosers;
 import qupath.fx.utils.FXUtils;
 import qupath.lib.gui.QuPathGUI;
+import qupath.lib.common.ThreadTools;
 import qupath.lib.gui.actions.ActionTools;
 import qupath.lib.gui.charts.HistogramDisplay;
 import qupath.lib.gui.charts.ScatterPlotDisplay;
@@ -108,6 +110,8 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Predicate;
+import java.util.function.Consumer;
+import java.util.concurrent.Callable;
 import java.util.stream.Collectors;
 
 /**
@@ -469,6 +473,11 @@ public class SummaryMeasurementTable {
         histogramDisplay = new HistogramDisplay(model, true);
         scatterPlotDisplay = new ScatterPlotDisplay();
 
+        model.measurementRevisionProperty().addListener((obs, oldValue, newValue) -> {
+            histogramDisplay.refreshHistogram();
+            scatterPlotDisplay.refreshScatterPlot();
+        });
+
         Tab tabHistogram = new Tab(QuPathResources.getString("Measure.MeasurementTable.histogram"), histogramDisplay.getPane());
         tabHistogram.setClosable(false);
         plotTabs.getTabs().add(tabHistogram);
@@ -490,6 +499,7 @@ public class SummaryMeasurementTable {
     }
 
     private Action actionShowPlots;
+    private final BooleanProperty exportRunning = new SimpleBooleanProperty(false);
     private Action actionCopy;
     private Action actionSave;
     private Action actionCloseWindow;
@@ -521,7 +531,8 @@ public class SummaryMeasurementTable {
         action.setLongText(QuPathResources.getString("Measure.MeasurementTable.copyDescription"));
         action.setAccelerator(new KeyCodeCombination(KeyCode.C, KeyCombination.SHORTCUT_DOWN));
         action.setGraphic(IconFactory.createNode(FontAwesome.Glyph.CLIPBOARD));
-        action.disabledProperty().bind(Bindings.isEmpty(table.getSelectionModel().getSelectedItems()));
+        action.disabledProperty().bind(exportRunning.or(
+                Bindings.isEmpty(table.getSelectionModel().getSelectedItems())));
         return action;
     }
 
@@ -530,6 +541,7 @@ public class SummaryMeasurementTable {
         action.setLongText(QuPathResources.getString("Measure.MeasurementTable.saveDescription"));
         action.setAccelerator(new KeyCodeCombination(KeyCode.S, KeyCombination.SHORTCUT_DOWN));
         action.setGraphic(IconFactory.createNode(FontAwesome.Glyph.SAVE));
+        action.disabledProperty().bind(exportRunning);
         return action;
     }
 
@@ -681,22 +693,14 @@ public class SummaryMeasurementTable {
         if (items.isEmpty())
             items = table.getItems();
 
-        var strings = model.getRowStrings(new ArrayList<>(items),
-                PathPrefs.tableDelimiterProperty().get(),
-                -1,
-                c -> !excludeColumns.contains(c));
-
-        try {
+        var snapshot = model.snapshotForExport(items);
+        var delimiter = PathPrefs.tableDelimiterProperty().get();
+        runTableExport(actionCopy, "Copying…", () -> snapshot.getRowStrings(delimiter, -1,
+                c -> !excludeColumns.contains(c)), strings -> {
             var content = new ClipboardContent();
             content.putString(String.join(System.lineSeparator(), strings));
             Clipboard.getSystemClipboard().setContent(content);
-        } catch (OutOfMemoryError e) {
-            logger.error("Error attempting to copy measurements: {}", e.getMessage(), e);
-            Dialogs.showErrorMessage(
-                    QuPathResources.getString("Measure.MeasurementTable.copyMeasurements"),
-                    QuPathResources.getString("Measure.MeasurementTable.measurementTableTooLong")
-            );
-        }
+        });
     }
 
     private Set<String> getExcludedColumns() {
@@ -721,13 +725,18 @@ public class SummaryMeasurementTable {
         File fileOutput = promptForOutputFile();
         if (fileOutput == null)
             return;
-        if (saveTableModel(model, fileOutput, excludeColumns)) {
+        var snapshot = model.snapshotForExport(model.getItems());
+        runTableExport(actionSave, "Saving…", () -> saveTableModel(snapshot, fileOutput, excludeColumns), saved -> {
+            if (!saved) {
+                Dialogs.showErrorMessage("Save measurements", "Unable to save the measurement table.");
+                return;
+            }
             WorkflowStep step;
             String includeColumns;
             if (excludeColumns.isEmpty())
                 includeColumns = "";
             else {
-                List<String> includeColumnList = new ArrayList<>(model.getAllNames());
+                List<String> includeColumnList = new ArrayList<>(snapshot.getAllNames());
                 includeColumnList.removeAll(excludeColumns);
                 includeColumns = ", " + includeColumnList.stream().map(s -> "'" + s + "'").collect(Collectors.joining(", "));
             }
@@ -764,6 +773,52 @@ public class SummaryMeasurementTable {
                 return;
             }
             imageData.getHistoryWorkflow().addStep(step);
+        });
+    }
+
+    private <T> void runTableExport(Action action, String progressText, Callable<T> work, Consumer<T> completed) {
+        if (exportRunning.get())
+            return;
+        String text = action.getText();
+        action.setText(progressText);
+        exportRunning.set(true);
+        var task = new Task<T>() {
+            @Override protected T call() throws Exception { return work.call(); }
+        };
+        Runnable restore = () -> {
+            action.setText(text);
+            exportRunning.set(false);
+        };
+        task.setOnSucceeded(event -> {
+            restore.run();
+            try {
+                completed.accept(task.getValue());
+            } catch (RuntimeException | OutOfMemoryError error) {
+                showTableExportFailure(error);
+            }
+        });
+        task.setOnFailed(event -> {
+            restore.run();
+            showTableExportFailure(task.getException());
+        });
+        task.setOnCancelled(event -> restore.run());
+        try {
+            ThreadTools.createThreadFactory("measurement-table-export", true, Thread.NORM_PRIORITY - 1)
+                    .newThread(task).start();
+        } catch (RuntimeException | Error e) {
+            restore.run();
+            throw e;
+        }
+    }
+
+    private void showTableExportFailure(Throwable error) {
+        logger.error("Measurement table export failed", error);
+        if (error instanceof OutOfMemoryError) {
+            Dialogs.showErrorMessage(
+                    QuPathResources.getString("Measure.MeasurementTable.copyMeasurements"),
+                    QuPathResources.getString("Measure.MeasurementTable.measurementTableTooLong"));
+        } else {
+            Dialogs.showErrorMessage("Export measurements", "Unable to export the measurement table. See the log for details.");
         }
     }
 
@@ -827,11 +882,13 @@ public class SummaryMeasurementTable {
     private void handleVisibilityChanged(ObservableValue<? extends Boolean> obs, Boolean oldValue, Boolean newValue) {
         if (newValue) {
             logger.debug("Attaching listeners");
+            model.updateMeasurementList();
             imageData.getHierarchy().addListener(listener);
             if (synchronizer != null)
                 synchronizer.attachListeners();
         } else {
             logger.debug("Removing listeners");
+            model.cancelPendingDisplayValues();
             imageData.getHierarchy().removeListener(listener);
             if (synchronizer != null)
                 synchronizer.removeListeners();
@@ -850,7 +907,7 @@ public class SummaryMeasurementTable {
      * @return
      */
     private ObservableValue<Number> createNumericMeasurement(final ObservableMeasurementTableData model, final PathObject pathObject, final String column) {
-        return Bindings.createDoubleBinding(() -> model.getNumericValue(pathObject, column));
+        return Bindings.createDoubleBinding(() -> model.getNumericValueForDisplay(pathObject, column), model.measurementRevisionProperty());
     }
 
     /**
@@ -864,7 +921,7 @@ public class SummaryMeasurementTable {
      * @return
      */
     private ObservableValue<String> createStringMeasurement(final ObservableMeasurementTableData model, final PathObject pathObject, final String column) {
-        return Bindings.createStringBinding(() -> model.getStringValue(pathObject, column));
+        return Bindings.createStringBinding(() -> model.getStringValueForDisplay(pathObject, column), model.measurementRevisionProperty());
     }
 
 

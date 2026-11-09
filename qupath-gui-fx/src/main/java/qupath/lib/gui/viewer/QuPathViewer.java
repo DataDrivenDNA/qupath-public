@@ -1112,7 +1112,7 @@ public class QuPathViewer implements PathObjectHierarchyListener, PathObjectSele
 			// This is a bit of a hack to avoid calling internal methods for ImageDisplay
 			// See https://github.com/qupath/qupath/issues/601
 			boolean displaySet = false;
-			if (imageDataNew != null && keepDisplay) {
+			if (imageDataNew != null && keepDisplay && QuPathGUI.getInstance() != null) {
 				if (imageDisplay.getImageData() != null && QuPathViewerUtils.serversCompatible(imageDataNew.getServer(), imageDisplay.getImageData().getServer())) {
 					imageDisplay.setImageData(imageDataNew, keepDisplay);
 					displaySet = true;

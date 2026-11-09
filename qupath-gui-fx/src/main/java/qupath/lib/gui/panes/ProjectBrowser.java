@@ -36,7 +36,6 @@ import javafx.beans.value.ChangeListener;
 import javafx.beans.value.ObservableValue;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
-import javafx.embed.swing.SwingFXUtils;
 import javafx.geometry.Insets;
 import javafx.geometry.Side;
 import javafx.scene.Node;
@@ -60,7 +59,6 @@ import javafx.scene.control.Tooltip;
 import javafx.scene.control.TreeCell;
 import javafx.scene.control.TreeItem;
 import javafx.scene.control.TreeView;
-import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
 import javafx.scene.input.KeyCode;
 import javafx.scene.layout.BorderPane;
@@ -80,8 +78,8 @@ import qupath.fx.dialogs.Dialogs;
 import qupath.fx.prefs.controlsfx.PropertyItemBuilder;
 import qupath.fx.utils.GridPaneUtils;
 import qupath.lib.common.GeneralTools;
-import qupath.lib.common.ThreadTools;
 import qupath.lib.gui.QuPathGUI;
+import qupath.lib.gui.background.BackgroundTasks;
 import qupath.lib.gui.actions.ActionTools;
 import qupath.lib.gui.commands.ProjectCommands;
 import qupath.lib.gui.localization.QuPathResources;
@@ -94,9 +92,7 @@ import qupath.lib.gui.tools.IconFactory;
 import qupath.lib.gui.tools.IconFactory.PathIcons;
 import qupath.lib.gui.tools.MenuTools;
 import qupath.lib.images.ImageData;
-import qupath.lib.images.servers.ImageServer;
 import qupath.lib.images.servers.ImageServerMetadata;
-import qupath.lib.io.UriUpdater;
 import qupath.lib.plugins.parameters.ParameterList;
 import qupath.lib.projects.Project;
 import qupath.lib.projects.ProjectImageEntry;
@@ -121,9 +117,6 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -156,8 +149,7 @@ public class ProjectBrowser implements ChangeListener<ImageData<BufferedImage>> 
 	private final TreeView<ProjectTreeRow> tree;
 	private final PredicateTextField<String> tfFilter;
 
-	 // Keep a record of servers that failed - don't want to keep putting in thumbnails requests if the server is unavailable.
-	private final Set<ProjectTreeRow> serversFailed = Collections.synchronizedSet(new HashSet<>());
+	private final ProjectEntryDisplayCache displayCache = new ProjectEntryDisplayCache();
 
 	private final StringProperty descriptionText = new SimpleStringProperty();
 
@@ -197,11 +189,6 @@ public class ProjectBrowser implements ChangeListener<ImageData<BufferedImage>> 
 	private static final String UNDEFINED_VALUE = QuPathResources.getString("Panes.ProjectBrowser.undefined");
 
 	/**
-	 * To load thumbnails in the background
-	 */
-	private static ExecutorService executor;
-
-	/**
 	 * Constructor.
 	 * @param qupath the current QuPath instance
 	 */
@@ -212,8 +199,7 @@ public class ProjectBrowser implements ChangeListener<ImageData<BufferedImage>> 
 
 		qupath.imageDataProperty().addListener(this);
 		
-		// Get thumbnails in separate thread
-		executor = Executors.newSingleThreadExecutor(ThreadTools.createThreadFactory("thumbnail-loader", true));
+		displayCache.revisionProperty().addListener(obs -> tree.refresh());
 
 		PathPrefs.maskImageNamesProperty().addListener((v, o, n) -> refreshTree(null));
 		PathPrefs.skipProjectUriChecksProperty().addListener((v, o, n) -> tree.refresh());
@@ -608,7 +594,9 @@ public class ProjectBrowser implements ChangeListener<ImageData<BufferedImage>> 
 			BufferedImage imgThumbnail = qupath.getViewer().getRGBThumbnail();
 			imgThumbnail = resizeForThumbnail(imgThumbnail);
 			try {
-				entry.setThumbnail(imgThumbnail);
+				var thumbnail = imgThumbnail;
+				BackgroundTasks.io(() -> { entry.setThumbnail(thumbnail); return null; });
+				displayCache.invalidate(entry);
 			} catch (IOException e1) {
 				logger.error("Error writing thumbnail", e1);
 			}
@@ -936,7 +924,7 @@ public class ProjectBrowser implements ChangeListener<ImageData<BufferedImage>> 
 			return true;		
 		
 		this.project = project;
-		ProjectTreeRowCell.resetUriStatus();
+		displayCache.clear();
 		tfFilter.textProperty().set("");
 		model = new ProjectImageTreeModel(project);
 		tree.setRoot(model.getRoot());
@@ -956,6 +944,7 @@ public class ProjectBrowser implements ChangeListener<ImageData<BufferedImage>> 
 			Platform.runLater(this::refreshProject);
 			return;
 		}
+		displayCache.clear();
 		refreshTree(null);
 	}
 
@@ -1165,6 +1154,7 @@ public class ProjectBrowser implements ChangeListener<ImageData<BufferedImage>> 
 	 */
 	private void refreshTree(ImageRow imageToSelect) {
 		Platform.runLater(() -> {
+			displayCache.clear();
 			tree.setRoot(null);
 			tree.setRoot(new ProjectTreeRowItem(new ProjectTreeRow.RootRow(project)));
 			tree.getRoot().setExpanded(true);
@@ -1356,26 +1346,9 @@ public class ProjectBrowser implements ChangeListener<ImageData<BufferedImage>> 
 		private final Canvas viewCanvas = new Canvas();
 		private final ImageView viewTooltip = new ImageView();
 
-		private ProjectTreeRow objectCell = null;
 		private final BooleanProperty showTooltip = new SimpleBooleanProperty();
 
 		private final BooleanProperty urisMissing = new SimpleBooleanProperty(false);
-
-		/**
-		 * Cache whether or not URIs refer to missing files.
-		 * We want to be able to inform the user when files are missing, but we don't want to call Files.exists()
-		 * too often, so we retain the result.
-		 * This means that, if the file was deleted or moved later, the user will need to refresh the project to see
-		 * the change.
-		 */
-		private static final Map<URI, UriUpdater.UriStatus> uriStatus = new ConcurrentHashMap<>();
-
-		/**
-		 * Reset the cache of URI statuses (called when a new project is opened).
-		 */
-		static void resetUriStatus() {
-			uriStatus.clear();
-		}
 
 		private final DoubleBinding viewWidth = Bindings.createDoubleBinding(
 				() -> thumbnailSize.get().getWidth(),
@@ -1415,6 +1388,9 @@ public class ProjectBrowser implements ChangeListener<ImageData<BufferedImage>> 
 		@Override
 		public void updateItem(ProjectTreeRow item, boolean empty) {
 			super.updateItem(item, empty);
+			showTooltip.set(false);
+			viewTooltip.setImage(null);
+			tooltip.setGraphic(null);
 			if (empty || item == null) {
                 setText(null);
                 setGraphic(null);
@@ -1438,109 +1414,38 @@ public class ProjectBrowser implements ChangeListener<ImageData<BufferedImage>> 
 				return;
 			}
 			
-			// IMAGE
-			ProjectImageEntry<BufferedImage> entry = item.getType() == ProjectTreeRow.Type.IMAGE ? ProjectTreeRow.getEntry(item) : null;
-			if (isCurrentImage(entry))
-				getStyleClass().add("current-image");
-			if (entry != null && !entry.hasImageData())
-				getStyleClass().add("no-saved-data");
-
-			// Check for URIs
-			if (entry != null && !PathPrefs.skipProjectUriChecksProperty().get()) {
-				try {
-					for (var uri : entry.getURIs()) {
-						if (uriStatus.computeIfAbsent(uri, ProjectTreeRowCell::checkUri) == UriUpdater.UriStatus.MISSING) {
-							urisMissing.set(true);
-							break;
-						}
-					}
-				} catch (IOException e) {
-					logger.error("Exception checking URIs: {}", e.getMessage(), e);
-				}
-			}
-
+			// IMAGE: cached display data arrives asynchronously and is never tied to a recycled cell.
+			var entry = ProjectTreeRow.getEntry(item);
+			viewTooltip.setImage(null);
+			tooltip.setGraphic(null);
+			viewCanvas.getGraphicsContext2D().clearRect(0, 0, viewCanvas.getWidth(), viewCanvas.getHeight());
 			if (entry == null) {
-				setText(item + " (" + getTreeItem().getChildren().size() + ")");
-				tooltip.setText(item.toString());
-                showTooltip.set(true);
+				setText(item.getDisplayableString());
 				setGraphic(null);
-			} else {
-				setGraphic(viewPane);
-				// Set whatever tooltip we have
-				tooltip.setGraphic(null);
-				showTooltip.set(true);
-
-				setText(entry.getImageName());
-				if (urisMissing.get())
-					tooltip.setText(MessageFormat.format(
-							QuPathResources.getString("Panes.ProjectBrowser.atLeastOneFileMissing"),
-							entry.getSummary()
-					));
-				else
-					tooltip.setText(entry.getSummary());
-
-				if (thumbnailSize.get() == ProjectThumbnailSize.HIDDEN) {
-					viewTooltip.setImage(null);
-					viewCanvas.getGraphicsContext2D().clearRect(0, 0, viewCanvas.getWidth(), viewCanvas.getHeight());
-				} else {
-					try {
-						// Fetch the thumbnail or generate it if not present
-						BufferedImage img = entry.getThumbnail();
-						if (img != null) {
-							Image image = SwingFXUtils.toFXImage(img, null);
-							viewTooltip.setImage(image);
-							tooltip.setGraphic(viewTooltip);
-							GuiTools.paintImage(viewCanvas, image);
-							objectCell = item;
-							if (getGraphic() == null)
-								setGraphic(viewPane);
-						} else if (!serversFailed.contains(item)) {
-							tooltip.setGraphic(viewTooltip);
-							viewCanvas.getGraphicsContext2D().clearRect(0, 0, viewCanvas.getWidth(), viewCanvas.getHeight());
-							executor.submit(() -> {
-								final ProjectTreeRow objectTemp = getItem();
-								final ProjectImageEntry<BufferedImage> entryTemp = ProjectTreeRow.getEntry(objectTemp);
-								try {
-									if (entryTemp != null && objectCell != objectTemp && entryTemp.getThumbnail() == null) {
-										try (ImageServer<BufferedImage> server = entryTemp.getServerBuilder().build()) {
-											entryTemp.setThumbnail(ProjectCommands.getThumbnailRGB(server));
-											objectCell = objectTemp;
-											tree.refresh();
-										} catch (Exception ex) {
-											logger.warn("Error opening ImageServer (thumbnail generation): {}", ex.getLocalizedMessage(), ex);
-											Platform.runLater(() -> setGraphic(IconFactory.createNode(15, 15, PathIcons.INACTIVE_SERVER)));
-											serversFailed.add(item);
-										}
-									}
-								} catch (IOException ex) {
-									logger.warn("Error getting thumbnail: {}", ex.getLocalizedMessage());
-									Platform.runLater(() -> setGraphic(IconFactory.createNode(15, 15, PathIcons.INACTIVE_SERVER)));
-									serversFailed.add(item);
-								}
-							});
-						} else
-							setGraphic(IconFactory.createNode(15, 15, PathIcons.INACTIVE_SERVER));
-					} catch (Exception e) {
-						setGraphic(IconFactory.createNode(15, 15, PathIcons.INACTIVE_SERVER));
-						logger.warn("Unable to read thumbnail for {} ({})", entry.getImageName(), e.getMessage());
-						serversFailed.add(item);
-					}
-				}
+				showTooltip.set(false);
+				return;
 			}
-		}
-
-
-		private static UriUpdater.UriStatus checkUri(URI uri) {
-			var path = GeneralTools.toPath(uri);
-			// In case the check is slow, we make it possible for the user to turn it off.
-			// See also https://github.com/qupath/qupath/pull/1298 for performance considerations.
-			// TODO: Can we check if this is a network drive, to skip the test?
-			if (path == null)
-				return UriUpdater.UriStatus.UNKNOWN;
-			else if (Files.notExists(path))
-				return UriUpdater.UriStatus.MISSING;
-			else
-				return UriUpdater.UriStatus.EXISTS;
+			if (isCurrentImage(entry)) getStyleClass().add("current-image");
+			setText(entry.getImageName());
+			showTooltip.set(true);
+			boolean showThumbnail = thumbnailSize.get() != ProjectThumbnailSize.HIDDEN;
+			setGraphic(showThumbnail ? viewPane : null);
+			var display = displayCache.get(entry, showThumbnail, !PathPrefs.skipProjectUriChecksProperty().get());
+			if (display == null) {
+				tooltip.setText(entry.getImageName() + "\nLoading image details…");
+				return;
+			}
+			if (!display.hasData()) getStyleClass().add("no-saved-data");
+			urisMissing.set(display.missing());
+			tooltip.setText(display.missing() ? MessageFormat.format(QuPathResources.getString("Panes.ProjectBrowser.atLeastOneFileMissing"), display.summary()) : display.summary());
+			var image = display.image() == null ? null : display.image().get();
+			if (image != null && showThumbnail) {
+				viewTooltip.setImage(image);
+				tooltip.setGraphic(viewTooltip);
+				GuiTools.paintImage(viewCanvas, image);
+			} else if (display.thumbnailFailed() && showThumbnail) {
+				setGraphic(IconFactory.createNode(15, 15, PathIcons.INACTIVE_SERVER));
+			}
 		}
 	}
 
