@@ -4,7 +4,7 @@
  * %%
  * Copyright (C) 2014 - 2016 The Queen's University of Belfast, Northern Ireland
  * Contact: IP Management (ipmanagement@qub.ac.uk)
- * Copyright (C) 2018 - 2020 QuPath developers, The University of Edinburgh
+ * Copyright (C) 2018 - 2026 QuPath developers, The University of Edinburgh
  * %%
  * QuPath is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as
@@ -24,6 +24,8 @@
 package qupath.lib.gui.panes;
 
 import javafx.beans.property.BooleanProperty;
+import javafx.beans.property.ObjectProperty;
+import javafx.beans.property.SimpleObjectProperty;
 import javafx.beans.property.StringProperty;
 import javafx.beans.value.ObservableValue;
 import javafx.collections.FXCollections;
@@ -50,6 +52,7 @@ import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.Pane;
 import javafx.scene.layout.VBox;
+import javafx.scene.text.Text;
 import javafx.scene.text.TextAlignment;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -59,11 +62,13 @@ import qupath.lib.color.ColorMaps;
 import qupath.lib.color.ColorMaps.ColorMap;
 import qupath.lib.gui.QuPathGUI;
 import qupath.lib.gui.UserDirectoryManager;
+import qupath.lib.gui.localization.QuPathResources;
 import qupath.lib.gui.prefs.PathPrefs;
 import qupath.lib.gui.tools.MeasurementMapper;
 import qupath.lib.gui.viewer.OverlayOptions;
 import qupath.lib.gui.viewer.QuPathViewer;
 import qupath.lib.objects.PathObject;
+import qupath.lib.objects.PathObjectFilter;
 import qupath.lib.objects.PathObjectTools;
 import qupath.lib.objects.hierarchy.PathObjectHierarchy;
 
@@ -73,62 +78,140 @@ import java.nio.file.Path;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 
 /**
- * Component used for displaying measurement maps, whereby detection objects are recolored 
+ * Component used for displaying measurement maps, where objects are recolored
  * according to measurement values.
- * 
- * @author Pete Bankhead
- *
  */
 public class MeasurementMapPane {
 	
 	private static final Logger logger = LoggerFactory.getLogger(MeasurementMapPane.class);
-	
-	private QuPathGUI qupath;
-	
-	private Map<String, MeasurementMapper> mapperMap = new HashMap<>();
 
-	private BorderPane pane = new BorderPane();
+	private static final StringProperty preferredMapperName = PathPrefs.createPersistentPreference("measurementMapperLUT", ColorMaps.getDefaultColorMap().getName());
+
+	private final QuPathGUI qupath;
 	
-	private ObservableList<ColorMap> colorMaps = FXCollections.observableArrayList();
-	private ObservableValue<ColorMap> selectedColorMap;
+	private final Map<String, MeasurementMapper> mapperMap = new HashMap<>();
+
+	private final BorderPane pane = new BorderPane();
+
+	private final ObjectProperty<PathObjectFilter> selectedFilter = new SimpleObjectProperty<>(PathObjectFilter.DETECTIONS_ALL);
 	
-	private ObservableList<String> baseList = FXCollections.observableArrayList();
-	private FilteredList<String> filteredList = new FilteredList<>(baseList);
-	private ListView<String> listMeasurements = new ListView<>(filteredList);
+	private final ObservableList<ColorMap> colorMaps = FXCollections.observableArrayList();
+	private final ObservableValue<ColorMap> selectedColorMap;
 	
-	private Slider sliderMin = new Slider(0, 1, 0);
-	private Slider sliderMax = new Slider(0, 1, 1);
+	private final ObservableList<String> baseList = FXCollections.observableArrayList();
+	private final FilteredList<String> filteredList = new FilteredList<>(baseList);
+	private final ListView<String> listMeasurements = new ListView<>(filteredList);
+	
+	private final Slider sliderMin = new Slider(0, 1, 0);
+	private final Slider sliderMax = new Slider(0, 1, 1);
 	
 	// For not painting values outside the mapper range
-	private CheckBox cbExcludeOutside = new CheckBox("Exclude outside range");
+	private final CheckBox cbExcludeOutside = new CheckBox(QuPathResources.getString("Panes.MeasurementMap.excludeOutsideRange"));
 	
-	private Canvas colorMapKey;
+	private final Canvas colorMapKey;
 	private Image colorMapKeyImage;
 	
-	private Label labelMin = new Label("");
-	private Label labelMax = new Label("");
+	private final Label labelMin = new Label("");
+	private final Label labelMax = new Label("");
 	
 	private MeasurementMapper mapper = null;
 	
-	private BooleanProperty showMap;
+	private final BooleanProperty showMap;
 	private boolean updatingSliders = false;
-	
-	
-	private static StringProperty preferredMapperName = PathPrefs.createPersistentPreference("measurementMapperLUT", ColorMaps.getDefaultColorMap().getName());
-	
+
+
 	/**
-	 * Constructor.
-	 * @param qupath the current QuPath instance
+	 * Create a measurement map pane to apply colors to all detection objects.
+	 * @param qupath QuPath instance
+	 * @return a new measurement map pane
 	 */
-	public MeasurementMapPane(final QuPathGUI qupath) {
+	public static MeasurementMapPane createForAllDetections(QuPathGUI qupath) {
+		return createForFilter(qupath, PathObjectFilter.DETECTIONS_ALL);
+	}
+
+	/**
+	 * Create a measurement map pane to apply colors to annotation objects.
+	 * @param qupath QuPath instance
+	 * @return a new measurement map pane
+	 */
+	public static MeasurementMapPane createForAnnotations(QuPathGUI qupath) {
+		return createForFilter(qupath, PathObjectFilter.ANNOTATIONS);
+	}
+
+	/**
+	 * Create a measurement map pane to apply colors to cell objects.
+	 * @param qupath QuPath instance
+	 * @return a new measurement map pane
+	 */
+	public static MeasurementMapPane createForCells(QuPathGUI qupath) {
+		return createForFilter(qupath, PathObjectFilter.CELLS);
+	}
+
+	/**
+	 * Create a measurement map pane to apply colors to tile objects.
+	 * @param qupath QuPath instance
+	 * @return a new measurement map pane
+	 */
+	public static MeasurementMapPane createForTiles(QuPathGUI qupath) {
+		return createForFilter(qupath, PathObjectFilter.TILES);
+	}
+
+	/**
+	 * Create a measurement map pane to apply colors to objects selected using a specific filter.
+	 * @param qupath QuPath instance
+	 * @return a new measurement map pane
+	 */
+	public static MeasurementMapPane createForFilter(QuPathGUI qupath, PathObjectFilter filter) {
+		return new MeasurementMapPane(qupath, filter);
+	}
+
+	/**
+	 * Create a measurement map pane that allows the user to select which object type to color.
+	 * @param qupath QuPath instance
+	 * @return a new measurement map pane
+	 */
+	public static MeasurementMapPane create(QuPathGUI qupath) {
+		return new MeasurementMapPane(
+				qupath,
+				PathObjectFilter.DETECTIONS_ALL,
+				List.of(PathObjectFilter.DETECTIONS_ALL, PathObjectFilter.CELLS,
+						PathObjectFilter.TILES, PathObjectFilter.ANNOTATIONS));
+	}
+
+	private MeasurementMapPane(final QuPathGUI qupath, final PathObjectFilter filter) {
+		this(qupath, filter, List.of(filter));
+	}
+
+	private MeasurementMapPane(final QuPathGUI qupath, final PathObjectFilter filter, final Collection<? extends PathObjectFilter> availableFilters) {
+		Objects.requireNonNull(qupath, "QuPath must not be null.");
+		Objects.requireNonNull(filter, "Filter must not be null.");
+		if (!availableFilters.isEmpty() && !availableFilters.contains(filter)) {
+			throw new IllegalArgumentException("Selected filter is not listed as an available filter");
+		}
 		this.qupath = qupath;
-		
+
 		logger.trace("Creating Measurement Map Pane");
+
+
+		var comboFilter = new ComboBox<PathObjectFilter>();
+		if (availableFilters.size() > 1) {
+			comboFilter.setMaxWidth(Double.MAX_VALUE);
+			comboFilter.getItems().setAll(availableFilters);
+			comboFilter.getSelectionModel().selectFirst();
+			selectedFilter.bind(comboFilter.getSelectionModel().selectedItemProperty());
+			selectedFilter.subscribe(this::updateMeasurements);
+			pane.setTop(comboFilter);
+		} else {
+			selectedFilter.setValue(filter);
+		}
+
 		
 		ColorMaps.installColorMaps(getUserColormapPaths().toArray(Path[]::new));
 		colorMaps.setAll(ColorMaps.getColorMaps().values());
@@ -137,14 +220,18 @@ public class MeasurementMapPane {
 		
 		cbExcludeOutside.setSelected(false);
 		
-		final ToggleButton toggleShowMap = new ToggleButton("Show map");
-		toggleShowMap.setTooltip(new Tooltip("Show/hide the map"));
+		final ToggleButton toggleShowMap = new ToggleButton(QuPathResources.getString("Panes.MeasurementMap.showMap"));
+		toggleShowMap.setTooltip(new Tooltip(QuPathResources.getString("Panes.MeasurementMap.showHideMap")));
 		toggleShowMap.setSelected(true);
 		showMap = toggleShowMap.selectedProperty();
 		showMap.addListener((v, o, n) -> updateMap());
-		
+
+		var noMeasurements = new Text("No measurements found");
+		noMeasurements.setStyle("-fx-fill: -fx-text-base-color;");
+//		listMeasurements.setPadding(new Insets(5, 0, 0, 0));
+		listMeasurements.setPlaceholder(noMeasurements);
 		listMeasurements.getSelectionModel().selectedItemProperty().addListener((e, f, g) -> updateMap());
-		listMeasurements.setTooltip(new Tooltip("List of available measurements"));
+		listMeasurements.setTooltip(new Tooltip(QuPathResources.getString("Panes.MeasurementMap.availableMeasurements")));
 		
 		pane.setCenter(listMeasurements);
 		
@@ -153,32 +240,20 @@ public class MeasurementMapPane {
 		sliderMin.valueProperty().addListener((e, f, g) -> updateDisplay());
 		sliderMax.valueProperty().addListener((e, f, g) -> updateDisplay());
 		
-		sliderMin.setTooltip(new Tooltip("Min display value"));
-		sliderMax.setTooltip(new Tooltip("Max display value"));
+		sliderMin.setTooltip(new Tooltip(QuPathResources.getString("Panes.MeasurementMap.minDisplayValue")));
+		sliderMax.setTooltip(new Tooltip(QuPathResources.getString("Panes.MeasurementMap.maxDisplayValue")));
 		
 		BorderPane panelLabels = new BorderPane();
 		labelMax.setTextAlignment(TextAlignment.RIGHT);
 		labelMin.setTextAlignment(TextAlignment.LEFT);
-		labelMin.addEventFilter(MouseEvent.MOUSE_CLICKED, e -> setSliderValue(sliderMin, "Set minimum display"));
-		labelMax.addEventFilter(MouseEvent.MOUSE_CLICKED, e -> setSliderValue(sliderMax, "Set maximum display"));
-//		labelMin.setOnMouseClicked(e -> {
-//			if (e.getClickCount() == 2) {
-//				String input = DisplayHelpers.showInputDialog("Set minimum value", "Enter the minimum value for the measurement map", Double.toString(sliderMin.getValue()));
-//				if (input == null || input.trim().isEmpty())
-//					return;
-//				try {
-//					double val = Double.parseDouble(input);
-//					sliderMin.setValue(val);
-//				} catch (NumberFormatException ex) {
-//					logger.error("Unable to parse number from {}", input);
-//				}
-//			}
-//		});
+		labelMin.addEventFilter(MouseEvent.MOUSE_CLICKED, e -> setSliderValue(sliderMin, QuPathResources.getString("Panes.MeasurementMap.setMinimumDisplay")));
+		labelMax.addEventFilter(MouseEvent.MOUSE_CLICKED, e -> setSliderValue(sliderMax, QuPathResources.getString("Panes.MeasurementMap.setMaximumDisplay")));
+
 		panelLabels.setLeft(labelMin);
 		panelLabels.setRight(labelMax);
 		
-		Button btnRefresh = new Button("Update map");
-		btnRefresh.setTooltip(new Tooltip("Update map data & recompute the min/max settings used to display colors"));
+		Button btnRefresh = new Button(QuPathResources.getString("Panes.MeasurementMap.updateMap"));
+		btnRefresh.setTooltip(new Tooltip(QuPathResources.getString("Panes.MeasurementMap.updateMapDescription")));
 		btnRefresh.setOnAction(e -> {
 			updateMeasurements();
 			mapperMap.clear();
@@ -225,10 +300,10 @@ public class MeasurementMapPane {
 			    updateColorMapperKey();
 			}
 		};
-		Tooltip.install(colorMapKey, new Tooltip("Measurement map key"));
+		Tooltip.install(colorMapKey, new Tooltip(QuPathResources.getString("Panes.MeasurementMap.measurementMapKey")));
 
 		ContextMenu colorMapContextMenu = new ContextMenu();
-		MenuItem copyColorMap = new MenuItem("Copy");
+		MenuItem copyColorMap = new MenuItem(QuPathResources.getString("Panes.MeasurementMap.copy"));
 		copyColorMap.setOnAction(event -> {
 			if (colorMapKeyImage != null) {
 				Clipboard clipboard = Clipboard.getSystemClipboard();
@@ -236,8 +311,8 @@ public class MeasurementMapPane {
 				content.putImage(colorMapKeyImage);
 				clipboard.setContent(content);
 				Dialogs.showInfoNotification(
-						"Color map",
-						"Color map copied to clipboard"
+						QuPathResources.getString("Panes.MeasurementMap.colorMap"),
+						QuPathResources.getString("Panes.MeasurementMap.colorMapCopiedToClipboard")
 				);
 			}
 		});
@@ -250,9 +325,9 @@ public class MeasurementMapPane {
 
 		// Filter to reduce visible measurements
 		var tfFilter = new PredicateTextField<String>();
-		var tooltip = new Tooltip("Enter text to filter measurement list");
+		var tooltip = new Tooltip(QuPathResources.getString("Panes.MeasurementMap.filterMeasurementListDescription"));
 		Tooltip.install(tfFilter, tooltip);
-		tfFilter.setPromptText("Filter measurement list");
+		tfFilter.setPromptText(QuPathResources.getString("Panes.MeasurementMap.filterMeasurementList"));
 		filteredList.predicateProperty().bind(tfFilter.predicateProperty());
 		BorderPane paneFilter = new BorderPane();
 		paneFilter.setPadding(new Insets(5, 0, 10, 0));
@@ -272,7 +347,7 @@ public class MeasurementMapPane {
 		}
 		if (comboMapper.getSelectionModel().isEmpty() && !comboMapper.getItems().isEmpty())
 			comboMapper.getSelectionModel().selectFirst();
-		comboMapper.setTooltip(new Tooltip("Select color map"));
+		comboMapper.setTooltip(new Tooltip(QuPathResources.getString("Panes.MeasurementMap.selectColorMap")));
 		selectedColorMap.addListener((v, o, n) -> {
 			updateMap();
 			if (n != null)
@@ -300,8 +375,6 @@ public class MeasurementMapPane {
 		toggleShowMap.setMaxWidth(Double.MAX_VALUE);
 		vbButtons.setFillWidth(true);
 		
-//		GridPane.setHgrow(colorMapperKey, Priority.ALWAYS);
-		
 		pane.setBottom(vbButtons);
 
 		pane.setPadding(new Insets(10, 10, 10, 10));
@@ -319,7 +392,7 @@ public class MeasurementMapPane {
 	
 	
 	static void setSliderValue(Slider slider, String message) {
-		Double val = Dialogs.showInputDialog("Measurement mapper", message, slider.getValue());
+		Double val = Dialogs.showInputDialog(QuPathResources.getString("Panes.MeasurementMap.measurementMapper"), message, slider.getValue());
 		if (val != null && Double.isFinite(val)) {
 			if (val > slider.getMax())
 				slider.setMax(val);
@@ -354,7 +427,13 @@ public class MeasurementMapPane {
 		mapper = mapperMap.get(measurement);
 		var colorMapper = selectedColorMap.getValue();
 		if (mapper == null) {
-			mapper = new MeasurementMapper(colorMapper, measurement, viewer.getHierarchy().getObjects(null, null));
+			var hierarchy = viewer.getHierarchy();
+			var filter = selectedFilter.get();
+			var inputObjects = hierarchy.getAllObjects(false)
+					.stream()
+					.filter(filter)
+					.toList();
+			mapper = new MeasurementMapper(colorMapper, measurement, inputObjects, filter);
 			if (mapper.isValid())
 				mapperMap.put(measurement, mapper);
 		} else if (colorMapper != null) {
@@ -434,12 +513,13 @@ public class MeasurementMapPane {
 			baseList.clear();
 			return;
 		}
-		
-		Collection<PathObject> pathObjects = hierarchy.getDetectionObjects();
+
+		var filter = selectedFilter.get();
+		Collection<PathObject> pathObjects = hierarchy.getAllObjects(false).stream().filter(filter).toList();
 		Set<String> measurements = PathObjectTools.getAvailableFeatures(pathObjects);
 		for (PathObject pathObject : pathObjects) {
 			if (!Double.isNaN(pathObject.getClassProbability())) {
-				measurements.add("Class probability");
+				measurements.add(QuPathResources.getString("Panes.MeasurementMap.classProbability"));
 				break;
 			}
 		}
@@ -454,7 +534,6 @@ public class MeasurementMapPane {
 		updateMapperBrightnessContrast();
 		for (var viewer : qupath.getAllViewers())
 			viewer.forceOverlayUpdate();
-//		viewer.repaint();
 	}
 	
 	
@@ -469,8 +548,7 @@ public class MeasurementMapPane {
 				}
 			}
 		}
-		Image img = SwingFXUtils.toFXImage(imgKey, null);
-		return img;
+        return SwingFXUtils.toFXImage(imgKey, null);
 	}
 
 }

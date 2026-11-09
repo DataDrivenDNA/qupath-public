@@ -2,7 +2,7 @@
  * #%L
  * This file is part of QuPath.
  * %%
- * Copyright (C) 2018 - 2020 QuPath developers, The University of Edinburgh
+ * Copyright (C) 2018 - 2026 QuPath developers, The University of Edinburgh
  * %%
  * QuPath is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as
@@ -21,10 +21,12 @@
 
 package qupath.opencv.ops;
 
+import java.awt.geom.AffineTransform;
 import org.apache.commons.math3.util.FastMath;
 import org.bytedeco.javacpp.PointerScope;
 import org.bytedeco.javacpp.indexer.DoubleIndexer;
 import org.bytedeco.javacpp.indexer.FloatIndexer;
+import org.bytedeco.javacpp.indexer.UByteIndexer;
 import org.bytedeco.opencv.global.opencv_core;
 import org.bytedeco.opencv.global.opencv_imgproc;
 import org.bytedeco.opencv.opencv_core.Mat;
@@ -55,7 +57,9 @@ import qupath.opencv.dnn.DnnModel;
 import qupath.opencv.dnn.DnnShape;
 import qupath.opencv.dnn.PredictionFunction;
 import qupath.opencv.ml.FeaturePreprocessor;
-import qupath.opencv.ml.OpenCVClassifiers.OpenCVStatModel;
+import qupath.opencv.ml.models.statmodel.OpenCVStatModels;
+import qupath.opencv.ml.models.statmodel.TrainableStatModel;
+import qupath.opencv.ml.models.PredictionModel;
 import qupath.opencv.tools.LocalNormalization;
 import qupath.opencv.tools.MultiscaleFeatures.MultiscaleFeature;
 import qupath.opencv.tools.MultiscaleFeatures.MultiscaleResultsBuilder;
@@ -107,7 +111,7 @@ public class ImageOps {
 	 * This is important because it makes name clashes more likely when serializing/deserializing ops, 
 	 * therefore in v0.3 these categories are re-introduced with efforts to maintain backwards compatibility.
 	 */
-	private static List<String> LEGACY_CATEGORIES = Arrays.asList("op.filters.", "op.ml.", "op.normalize.", "op.threshold.");
+	private static final List<String> LEGACY_CATEGORIES = Arrays.asList("op.filters.", "op.ml.", "op.normalize.", "op.threshold.");
 	
 	@SuppressWarnings("unchecked")
 	private static <T> void registerTypes(SubTypeAdapterFactory<T> factory, Class<T> factoryType, Class<?> cls, String base) {
@@ -151,6 +155,8 @@ public class ImageOps {
 		factoryDataOps = GsonTools.createSubTypeAdapterFactory(ImageDataOp.class, "type");
 		GsonTools.getDefaultBuilder().registerTypeAdapterFactory(factoryDataOps);
 		registerTypes(factoryDataOps, ImageDataOp.class, ImageOps.class, "data.op");
+		registerDataOp(Multiscale3DOp.class, "data.op.multiscale");
+		registerDataOp(CachingDataOp.class, "data.op.caching");
 	}
 	
 	/**
@@ -254,6 +260,68 @@ public class ImageOps {
 	public static ImageDataOp buildImageDataOp(Collection<? extends ColorTransform> inputChannels) {
 		return buildImageDataOp(inputChannels.toArray(ColorTransform[]::new));
 	}
+
+	/**
+	 * Create an {@link ImageDataOp} that can compute multiscale features using 3D filters,
+	 * giving the output as concatenated channels.
+	 * <p>
+	 * Because an {@link ImageOp} takes a single {@link Mat} as input, representing a 2D image,
+	 * it is not generally possible to use ops to compute 3D features.
+	 * This data op overcomes that by computing the features early, then permitting additional
+	 * (standard, 2D) ops to be appended for postprocessing if needed.
+	 * @param inputChannels collection of {@link ColorTransform} objects used to extract the pixels that will form the channels of the output {@link Mat}.
+	 * 						If empty, the original image channels will be used.
+	 * @param features requested features
+	 * @param scales the Gaussian sigma values corresponding to the feature scales.
+	 *               These are in pixel units at the resolution of the region request.
+	 *               For anisotropic pixels (z-spacing is different from x and y), the scale values
+	 *               are given for xy and then internally will be recalibrated so that z is similar.
+	 *               If this is undesirable, set the pixel calibration for the image server to be uncalibrated
+	 *               so that the correction cannot be applied.
+	 * @return the {@link ImageDataOp}
+	 * @see qupath.opencv.tools.MultiscaleFeatures
+	 */
+	public static ImageDataOp buildMultiscale3DOp(Collection<? extends ColorTransform> inputChannels,
+												  Collection<MultiscaleFeature> features,
+												  double[] scales) {
+		return new Multiscale3DOp(
+				inputChannels,
+				features,
+				scales);
+	}
+
+
+	/**
+	 * Wrap an existing data op to cache its results, using a default cache size.
+	 * This is useful if the op takes a long time to process, and may be reused
+	 * with different (postprocessing) ImageOps appended.
+	 * @param dataOp the op to wrap
+	 * @return the caching data op, or the original op if it is already caching
+	 * @since v0.8.0
+	 * @see #makeCachingDataOp(ImageDataOp, long)
+	 */
+	public static ImageDataOp makeCachingDataOp(ImageDataOp dataOp) {
+		if (dataOp instanceof CachingDataOp)
+			return dataOp;
+		else
+			return new CachingDataOp(dataOp);
+	}
+
+	/**
+	 * Wrap an existing data op to cache its results.
+	 * This is useful if the op takes a long time to process, and may be reused
+	 * with different (postprocessing) ImageOps appended.
+	 * @param dataOp the op to wrap
+	 * @param cacheSizeBytes maximum cache size, in bytes
+	 * @return the caching data op, or the original op if it is already caching
+	 * @since v0.8.0
+	 */
+	public static ImageDataOp makeCachingDataOp(ImageDataOp dataOp, long cacheSizeBytes) {
+		if (dataOp instanceof CachingDataOp)
+			return dataOp;
+		else
+			return new CachingDataOp(dataOp, null, cacheSizeBytes);
+	}
 	
 	
 	
@@ -333,8 +401,9 @@ public class ImageOps {
 		public List<ImageChannel> getChannels(ImageData<BufferedImage> imageData) {
 			if (op == null)
 				return imageData.getServerMetadata().getChannels();
-			else
-				return op.getChannels(imageData.getServerMetadata().getChannels());
+			else {
+                return op.getChannels(imageData.getServerMetadata().getChannels());
+			}
 		}
 
 		@Override
@@ -1025,6 +1094,254 @@ public class ImageOps {
 		public static ImageOp features(Collection<MultiscaleFeature> features, double sigmaX, double sigmaY) {
 			return new MultiscaleFeatureOp(features, sigmaX, sigmaY);
 		}
+
+		/**
+		 * Enum giving ways to combine rotated ridge images.
+		 */
+		public enum RotatedFilterProjection {
+			/**
+			 * Calculate the minimum pixel value across rotations.
+			 */
+			MIN,
+			/**
+			 * Calculate the maximum pixel value across rotations.
+			 */
+			MAX,
+			/**
+			 * Take the pixel with the largest absolute value, retaining the original sign.
+			 */
+			MAX_ABS
+		}
+
+		/**
+		 * Apply a ridge-enhancing filter rotated at different orientations, projecting the result onto one or more outputs.
+		 * The filter width uses the second derivative of the Gaussian.
+		 * @param sigmaWidth sigma value for the estimated ridge width; a second order Gaussian derivative would be calculated
+		 * @param projections optional array of projections.
+		 *                    If not set, all projections will be used.
+		 * @return
+		 */
+		public static ImageOp rotatedRidge(double sigmaWidth, RotatedFilterProjection... projections) {
+			return rotatedRidge(sigmaWidth, sigmaWidth * 4,12, projections);
+		}
+
+		/**
+		 * Apply a ridge-enhancing filter rotated at different orientations, projecting the result onto one or more outputs.
+		 * The filter width uses the second derivative of the Gaussian.
+		 * @param sigmaWidth sigma value for the estimated ridge width; a second order Gaussian derivative would be calculated
+		 * @param sigmaLength sigma value for the filter length; this is usually &gt; sigmaWidth and relates to the ridge tortuosity
+		 *                    (for ridges with infrequent changes in orientations, a higher value may be used)
+		 * @param nRotations number of rotations to calculate (typically 8-12)
+		 * @param projections optional array of projections.
+		 *                    If not set, all projections will be used.
+		 * @return
+		 */
+		public static ImageOp rotatedRidge(double sigmaWidth, double sigmaLength, int nRotations, RotatedFilterProjection... projections) {
+			return rotatedGaussian(
+					new GaussianDerivative(sigmaWidth, 2),
+					new GaussianDerivative(sigmaLength, 0),
+					nRotations, projections);
+		}
+
+		/**
+		 * Record to the sigma value for a Gaussian filter.
+		 * @param sigma Gaussian sigma
+		 * @param order derivative order
+		 */
+		public record GaussianDerivative(double sigma, int order) {}
+
+		/**
+		 * Apply rotated anisotropic Gaussian filter rotated at different orientations, projecting the result onto one or more outputs.
+		 * @param width Gaussian sigma for the filter width
+		 * @param length Gaussian sigma for the filter height
+		 * @param nRotations number of rotations to calculate (typically 8-12)
+		 * @param projections optional array of projections.
+		 *                    If not set, all projections will be used.
+		 * @return
+		 */
+		public static ImageOp rotatedGaussian(double width,
+											  double length, int nRotations, RotatedFilterProjection... projections) {
+			return rotatedGaussian(
+					new GaussianDerivative(width, 0), new GaussianDerivative(length, 0), nRotations, projections);
+		}
+
+		/**
+		 * Apply rotated anisotropic Gaussian filter rotated at different orientations, projecting the result onto one or more outputs.
+		 * @param width Gaussian sigma and order for the filter width
+		 * @param length Gaussian sigma and order for the filter height
+		 * @param nRotations number of rotations to calculate (typically 8-12)
+		 * @param projections optional array of projections.
+		 *                    If not set, all projections will be used.
+		 * @return
+		 */
+		private static ImageOp rotatedGaussian(
+				GaussianDerivative width,
+				GaussianDerivative length, int nRotations, RotatedFilterProjection... projections) {
+			return new RotatedGaussianFilterOp(
+					width, length, nRotations, projections);
+		}
+
+		/**
+		 * Compute a morphological opening of an image using 12 rotated line filters (1-pixel thick),
+		 * projecting the results to create output images.
+		 * @param lineLength length of the line filter (must be an odd number)
+		 * @param projections optional array of projections.
+		 * 					  If not specified, minimum and maximum projections will be used.
+		 * @return the op
+		 */
+		public static ImageOp rotatedOpen(int lineLength, RotatedFilterProjection... projections) {
+			return rotatedOpen(lineLength, 1, 12, projections);
+		}
+
+		/**
+		 * Compute a morphological opening of an image using rotated line filters,
+		 * projecting the results to create output images.
+		 * @param lineLength length of the line filter (must be an odd number)
+		 * @param lineThickness thickness of the line filter (must be an odd number)
+		 * @param nRotations number of rotations (typically 12)
+		 * @param projections optional array of projections.
+		 * 					  If not specified, minimum and maximum projections will be used.
+		 * @return the op
+		 */
+		public static ImageOp rotatedOpen(int lineLength, int lineThickness, int nRotations, RotatedFilterProjection... projections) {
+			return new RotatedOpenOp(lineLength, lineThickness, nRotations, checkRotatedMorphOpProjections(projections));
+		}
+
+		/**
+		 * Compute a morphological closing of an image using 12 rotated line filters (1-pixel thick),
+		 * projecting the results to create output images.
+		 * @param lineLength length of the line filter (must be an odd number)
+		 * @param projections optional array of projections.
+		 * 					  If not specified, minimum and maximum projections will be used.
+		 * @return the op
+		 */
+		public static ImageOp rotatedClose(int lineLength, RotatedFilterProjection... projections) {
+			return rotatedClose(lineLength, 1, 12, projections);
+		}
+
+		/**
+		 * Compute a morphological closing of an image using rotated line filters,
+		 * projecting the results to create output images.
+		 * @param lineLength length of the line filter (must be an odd number)
+		 * @param lineThickness thickness of the line filter (must be an odd number)
+		 * @param nRotations number of rotations (typically 12)
+		 * @param projections optional array of projections.
+		 * 					  If not specified, minimum and maximum projections will be used.
+		 * @return the op
+		 */
+		public static ImageOp rotatedClose(int lineLength, int lineThickness, int nRotations, RotatedFilterProjection... projections) {
+			return new RotatedCloseOp(lineLength, lineThickness, nRotations, checkRotatedMorphOpProjections(projections));
+		}
+
+		/**
+		 * Compute a morphological dilation of an image using 12 rotated line filters (1-pixel thick),
+		 * projecting the results to create output images.
+		 * @param lineLength length of the line filter (must be an odd number)
+		 * @param projections optional array of projections.
+		 * 					  If not specified, minimum and maximum projections will be used.
+		 * @return the op
+		 */
+		public static ImageOp rotatedDilate(int lineLength, RotatedFilterProjection... projections) {
+			return rotatedDilate(lineLength, 1, 12, projections);
+		}
+
+		/**
+		 * Compute a morphological dilation of an image using rotated line filters,
+		 * projecting the results to create output images.
+		 * @param lineLength length of the line filter (must be an odd number)
+		 * @param lineThickness thickness of the line filter (must be an odd number)
+		 * @param nRotations number of rotations (typically 12)
+		 * @param projections optional array of projections.
+		 * 					  If not specified, minimum and maximum projections will be used.
+		 * @return the op
+		 */		public static ImageOp rotatedDilate(int lineLength, int lineThickness, int nRotations, RotatedFilterProjection... projections) {
+			return new RotatedDilateeOp(lineLength, lineThickness, nRotations, checkRotatedMorphOpProjections(projections));
+		}
+
+		/**
+		 * Compute a morphological erosion of an image using 12 rotated line filters (1-pixel thick),
+		 * projecting the results to create output images.
+		 * @param lineLength length of the line filter (must be an odd number)
+		 * @param projections optional array of projections.
+		 * 					  If not specified, minimum and maximum projections will be used.
+		 * @return the op
+		 */
+		public static ImageOp rotatedErode(int lineLength, RotatedFilterProjection... projections) {
+			return rotatedErode(lineLength, 1, 12, projections);
+		}
+
+		/**
+		 * Compute a morphological erosion of an image using rotated line filters,
+		 * projecting the results to create output images.
+		 * @param lineLength length of the line filter (must be an odd number)
+		 * @param lineThickness thickness of the line filter (must be an odd number)
+		 * @param nRotations number of rotations (typically 12)
+		 * @param projections optional array of projections.
+		 * 					  If not specified, minimum and maximum projections will be used.
+		 * @return the op
+		 */
+		public static ImageOp rotatedErode(int lineLength, int lineThickness, int nRotations, RotatedFilterProjection... projections) {
+			return new RotatedErodeOp(lineLength, lineThickness, nRotations, checkRotatedMorphOpProjections(projections));
+		}
+
+		/**
+		 * Compute a morphological tophat filtering of an image using 12 rotated line filters (1-pixel thick),
+		 * projecting the results to create output images.
+		 * @param lineLength length of the line filter (must be an odd number)
+		 * @param projections optional array of projections.
+		 * 					  If not specified, minimum and maximum projections will be used.
+		 * @return the op
+		 */
+		public static ImageOp rotatedTopHat(int lineLength, RotatedFilterProjection... projections) {
+			return rotatedTopHat(lineLength, 1, 12, projections);
+		}
+
+		/**
+		 * Compute a morphological tophat filtering of an image using rotated line filters,
+		 * projecting the results to create output images.
+		 * @param lineLength length of the line filter (must be an odd number)
+		 * @param lineThickness thickness of the line filter (must be an odd number)
+		 * @param nRotations number of rotations (typically 12)
+		 * @param projections optional array of projections.
+		 * 					  If not specified, minimum and maximum projections will be used.
+		 * @return the op
+		 */
+		public static ImageOp rotatedTopHat(int lineLength, int lineThickness, int nRotations, RotatedFilterProjection... projections) {
+			return new RotatedTopHatOp(lineLength, lineThickness, nRotations, checkRotatedMorphOpProjections(projections));
+		}
+
+		/**
+		 * Compute a morphological blackhat filtering of an image using 12 rotated line filters (1-pixel thick),
+		 * projecting the results to create output images.
+		 * @param lineLength length of the line filter (must be an odd number)
+		 * @param projections optional array of projections.
+		 * 					  If not specified, minimum and maximum projections will be used.
+		 * @return the op
+		 */
+		public static ImageOp rotatedBlackHat(int lineLength, RotatedFilterProjection... projections) {
+			return rotatedBlackHat(lineLength, 1, 12, projections);
+		}
+
+		/**
+		 * Compute a morphological blackhat filtering of an image using rotated line filters,
+		 * projecting the results to create output images.
+		 * @param lineLength length of the line filter (must be an odd number)
+		 * @param lineThickness thickness of the line filter (must be an odd number)
+		 * @param nRotations number of rotations (typically 12)
+		 * @param projections optional array of projections.
+		 * 					  If not specified, minimum and maximum projections will be used.
+		 * @return the op
+		 */		public static ImageOp rotatedBlackHat(int lineLength, int lineThickness, int nRotations, RotatedFilterProjection... projections) {
+			return new RotatedBlackHatOp(lineLength, lineThickness, nRotations, checkRotatedMorphOpProjections(projections));
+		}
+
+		private static RotatedFilterProjection[] checkRotatedMorphOpProjections(RotatedFilterProjection... projections) {
+			if (projections.length == 0) {
+				return new RotatedFilterProjection[] {RotatedFilterProjection.MIN, RotatedFilterProjection.MAX};
+			} else {
+				return projections;
+			}
+		}
 		
 		/**
 		 * Apply a 2D maximum filter.
@@ -1193,8 +1510,371 @@ public class ImageOps {
 				}
 				return builder;
 			}
-			
-			
+
+		}
+
+		@OpType("rotated-gaussian")
+		static class RotatedGaussianFilterOp extends AbstractRotatedFilterOp {
+
+			private GaussianDerivative filterWidth;
+			private GaussianDerivative filterLength;
+
+			RotatedGaussianFilterOp(GaussianDerivative filterWidth, GaussianDerivative filterLength, int nRotations, RotatedFilterProjection... projections) {
+				super(nRotations, projections);
+				this.filterWidth = validateFilter(filterWidth);
+				this.filterLength = validateFilter(filterLength);
+			}
+
+			private static GaussianDerivative validateFilter(GaussianDerivative filter) {
+				if (filter == null)
+					throw new IllegalArgumentException("Filter must not be null");
+				if (filter.sigma() <= 0)
+					throw new IllegalArgumentException("Sigma must be > 0, not " + filter.sigma());
+				if (filter.order() < 0)
+					throw new IllegalArgumentException("Order must be >= 0, not " + filter.order());
+				return filter;
+			}
+
+			@Override
+			protected void applyFilter(Mat input, Mat kernel, Mat dest) {
+				opencv_imgproc.filter2D(input, dest, getOutputType(input), kernel);
+			}
+
+			@Override
+			protected Mat createFirstKernel() {
+				double maxSigma = getMaxSigma();
+				int size = (int)Math.ceil(maxSigma * 4) * 2 + 1;
+				var mat = new Mat(size, size, opencv_core.CV_64FC1, Scalar.ZERO);
+				try (DoubleIndexer idx = mat.createIndexer()) {
+					// Use -1 to get positive values for 'bright' ridges, negative values for 'dark' ridges
+					idx.put(size/2, size/2, -1.0);
+					try (var kx = OpenCVTools.getGaussianDerivKernel(filterWidth.sigma(), filterWidth.order(), false)) {
+						try (var ky = OpenCVTools.getGaussianDerivKernel(filterLength.sigma(), filterLength.order(), true)) {
+							opencv_imgproc.sepFilter2D(mat, mat, mat.depth(), kx, ky);
+						}
+					}
+				}
+				return mat;
+			}
+
+			private double getMaxSigma() {
+				return Math.max(filterWidth.sigma(), filterLength.sigma());
+			}
+
+			@Override
+			protected String updateChannelName(String inputName, RotatedFilterProjection projection) {
+				String name = "%s (%s %d rotations, sigma=[%.2f,%.2f], order=[%d,%d]";
+				return String.format(name, inputName, projection.toString().toLowerCase(),
+						nRotations(), filterWidth.sigma(), filterLength.sigma(), filterWidth.order(), filterLength.order());
+			}
+
+			@Override
+			protected Padding calculatePadding() {
+				double sigmaMax = getMaxSigma();
+				return getDefaultGaussianPadding(sigmaMax, sigmaMax);
+			}
+
+		}
+
+		static abstract class RotatedLineMorphOp extends AbstractRotatedFilterOp {
+
+			private int lineLength;
+			private int lineThickness;
+
+			RotatedLineMorphOp(int lineLength, int lineThickness, int nRotations, RotatedFilterProjection... projections) {
+				super(nRotations, projections);
+				if (lineThickness % 2 != 1) {
+					throw new IllegalArgumentException("Line thickness must be an odd number");
+				}
+				if (lineLength % 2 != 1) {
+					throw new IllegalArgumentException("Line length must be an odd number");
+				}
+				this.lineLength = lineLength;
+				this.lineThickness = lineThickness;
+			}
+
+
+			@Override
+			protected void applyFilter(Mat input, Mat kernel, Mat dest) {
+				opencv_imgproc.morphologyEx(input, dest, getMorphOp(), kernel);
+			}
+
+			protected abstract int getMorphOp();
+
+			protected Mat createFirstKernel() {
+				int size = getMaxFilterDim();
+				var mat = new Mat(size, size, opencv_core.CV_8UC1, Scalar.ZERO);
+				int firstColumn = (size - lineThickness) / 2;
+				try (UByteIndexer idx = mat.createIndexer()) {
+					for (int row = 0; row < size; row++) {
+						for (int col = firstColumn; col < firstColumn+lineThickness; col++) {
+							idx.put(row, col, 1);
+						}
+					}
+				}
+				return mat;
+			}
+
+			protected String updateChannelName(String inputName, RotatedFilterProjection projection) {
+				String name = "%s (%s %s %d rotations, length=%d, thickness=%d";
+				return String.format(name, inputName, getOpName(), projection.toString().toLowerCase(),
+						nRotations(), lineLength, lineThickness);
+			}
+
+			protected String getOpName() {
+				return switch(getMorphOp()) {
+					case opencv_imgproc.MORPH_BLACKHAT -> "Blackhat";
+					case opencv_imgproc.MORPH_CLOSE -> "Close";
+					case opencv_imgproc.MORPH_OPEN -> "Open";
+					case opencv_imgproc.MORPH_DILATE -> "Dilate";
+					case opencv_imgproc.MORPH_ERODE -> "Erode";
+					case opencv_imgproc.MORPH_TOPHAT ->  "Tophat";
+					default -> "Op=" + getMorphOp();
+				};
+			}
+
+			private int getMaxFilterDim() {
+				return Math.max(lineLength, lineThickness);
+			}
+
+			@Override
+			protected Padding calculatePadding() {
+				return Padding.symmetric(getMaxFilterDim() / 2 + 1);
+			}
+
+		}
+
+		@OpType("rotated-morph-open")
+		static class RotatedOpenOp extends RotatedLineMorphOp {
+
+			RotatedOpenOp(int lineLength, int lineThickness, int nRotations, RotatedFilterProjection... projections) {
+				super(lineLength, lineThickness, nRotations, projections);
+			}
+
+			@Override
+			protected int getMorphOp() {
+				return opencv_imgproc.MORPH_OPEN;
+			}
+
+		}
+
+		@OpType("rotated-morph-close")
+		static class RotatedCloseOp extends RotatedLineMorphOp {
+
+			RotatedCloseOp(int lineLength, int lineThickness, int nRotations, RotatedFilterProjection... projections) {
+				super(lineLength, lineThickness, nRotations, projections);
+			}
+
+			@Override
+			protected int getMorphOp() {
+				return opencv_imgproc.MORPH_CLOSE;
+			}
+
+		}
+
+		@OpType("rotated-morph-dilate")
+		static class RotatedDilateeOp extends RotatedLineMorphOp {
+
+			RotatedDilateeOp(int lineLength, int lineThickness, int nRotations, RotatedFilterProjection... projections) {
+				super(lineLength, lineThickness, nRotations, projections);
+			}
+
+			@Override
+			protected int getMorphOp() {
+				return opencv_imgproc.MORPH_DILATE;
+			}
+
+		}
+
+		@OpType("rotated-morph-erode")
+		static class RotatedErodeOp extends RotatedLineMorphOp {
+
+			RotatedErodeOp(int lineLength, int lineThickness, int nRotations, RotatedFilterProjection... projections) {
+				super(lineLength, lineThickness, nRotations, projections);
+			}
+
+			@Override
+			protected int getMorphOp() {
+				return opencv_imgproc.MORPH_ERODE;
+			}
+
+		}
+
+		@OpType("rotated-morph-tophat")
+		static class RotatedTopHatOp extends RotatedLineMorphOp {
+
+			RotatedTopHatOp(int lineLength, int lineThickness, int nRotations, RotatedFilterProjection... projections) {
+				super(lineLength, lineThickness, nRotations, projections);
+			}
+
+			@Override
+			protected int getMorphOp() {
+				return opencv_imgproc.MORPH_TOPHAT;
+			}
+
+		}
+
+		@OpType("rotated-morph-blackhat")
+		static class RotatedBlackHatOp extends RotatedLineMorphOp {
+
+			RotatedBlackHatOp(int lineLength, int lineThickness, int nRotations, RotatedFilterProjection... projections) {
+				super(lineLength, lineThickness, nRotations, projections);
+			}
+
+			@Override
+			protected int getMorphOp() {
+				return opencv_imgproc.MORPH_BLACKHAT;
+			}
+
+		}
+
+
+		static abstract class AbstractRotatedFilterOp extends PaddedOp {
+
+			private int nRotations;
+			private List<RotatedFilterProjection> projections;
+			private transient List<Mat> kernels;
+
+			AbstractRotatedFilterOp(int nRotations, RotatedFilterProjection... projections) {
+				if (nRotations < 1)
+					throw new IllegalArgumentException("nRotations must be > 1");
+				this.nRotations = nRotations;
+				this.projections = projections.length == 0 ? List.of(RotatedFilterProjection.values()) : List.of(projections);
+			}
+
+			@Override
+			public List<Mat> transformPadded(Mat input) {
+				var kernels = getKernels();
+				var output = new ArrayList<Mat>();
+				for (var channel : OpenCVTools.splitChannels(input)) {
+					output.addAll(transformSingleChannel(channel, kernels));
+				}
+				return List.copyOf(output);
+			}
+
+			protected int nRotations() {
+				return nRotations;
+			}
+
+			private List<Mat> transformSingleChannel(Mat input, List<Mat> kernels) {
+				// Preallocate output
+				int outputType = getOutputType(input);
+				List<Mat> output = new ArrayList<>(projections.size());
+				for (var proj : projections) {
+					Scalar fill = switch(proj) {
+						case MIN -> Scalar.all(Double.POSITIVE_INFINITY);
+						case MAX -> Scalar.all(Double.NEGATIVE_INFINITY);
+						case MAX_ABS -> Scalar.all(0.0);
+					};
+					var temp = new Mat(input.rows(), input.cols(), outputType, fill);
+					temp.retainReference();
+					output.add(temp);
+					fill.close();
+				}
+
+				try (var temp = new Mat()) {
+					for (var k : kernels) {
+						applyFilter(input, k, temp);
+						int ind = 0;
+						for (var proj : projections) {
+							Mat tempOutput = output.get(ind);
+							switch (proj) {
+                                case MIN -> {
+									opencv_core.min(tempOutput, temp, tempOutput);
+								}
+								case MAX -> {
+									opencv_core.max(tempOutput, temp, tempOutput);
+								}
+								case MAX_ABS -> {
+									OpenCVTools.apply(tempOutput, temp, tempOutput, AbstractRotatedFilterOp::absMax);
+								}
+							}
+							ind++;
+						}
+					}
+				}
+				return output;
+			}
+
+			protected int getOutputType(Mat input) {
+				return input.depth() == opencv_core.CV_64F ? input.type() : opencv_core.CV_32FC(OpenCVTools.typeToChannels(input.type()));
+			}
+
+			protected abstract void applyFilter(Mat input, Mat kernel, Mat dest);
+
+			private static double absMax(double a, double b) {
+				if (Math.abs(b) > Math.abs(a))
+					return b;
+				else
+					return a;
+			}
+
+			private List<Mat> getKernels() {
+				if (kernels == null || kernels.size() < nRotations || kernels.stream().anyMatch(m -> m.isNull())) {
+					synchronized (this) {
+						if (kernels == null) {
+							kernels = createKernels(nRotations);
+							kernels.forEach(Mat::retainReference); // Don't garbage collect too quickly
+						}
+					}
+				}
+				return kernels;
+			}
+
+			protected List<Mat> createKernels(int nRotations) {
+				var firstKernel = createFirstKernel();
+				List<Mat> kernels = new ArrayList<>();
+				kernels.add(firstKernel);
+				var transform = new AffineTransform();
+				int anchorX = firstKernel.cols() / 2;
+				int anchorY = firstKernel.rows() / 2;
+				try (var affine = new Mat(2, 3, opencv_core.CV_32F)) {
+					for (int rot = 1; rot < nRotations; rot++) {
+						double theta = Math.PI / nRotations * rot;
+						transform.setToIdentity();
+						transform.rotate(theta, anchorX, anchorY);
+						try (FloatIndexer idx = affine.createIndexer()) {
+							idx.put(0, 0, (float)transform.getScaleX());
+							idx.put(0, 1, (float)transform.getShearX());
+							idx.put(0, 2, (float)transform.getTranslateX());
+							idx.put(1, 0, (float)transform.getShearY());
+							idx.put(1, 1, (float)transform.getScaleY());
+							idx.put(1, 2, (float)transform.getTranslateY());
+						}
+						var temp = firstKernel.clone();
+						opencv_imgproc.warpAffine(firstKernel, temp, affine, firstKernel.size());
+						kernels.add(temp);
+					}
+				}
+				return kernels;
+			}
+
+			/**
+			 * Create the first kernel. This should be square. It will be rotated.
+			 * @return
+			 */
+			protected abstract Mat createFirstKernel();
+
+			@Override
+			public PixelType getOutputType(PixelType pixelType) {
+				return pixelType.isFloatingPoint() ? pixelType : PixelType.FLOAT32;
+			}
+
+			@Override
+			public List<ImageChannel> getChannels(List<ImageChannel> channels) {
+				List<ImageChannel> output = new ArrayList<>();
+				for (var proj : projections) {
+					for (var c : channels) {
+						output.add(ImageChannel.getInstance(
+								updateChannelName(c.getName(), proj),
+								c.getColor()));
+					}
+				}
+				return output;
+			}
+
+			protected abstract String updateChannelName(String inputName, RotatedFilterProjection projection);
+
 		}
 		
 		
@@ -1228,27 +1908,20 @@ public class ImageOps {
 		abstract static class MorphOp extends PaddedOp {
 			
 			private int radius;
-			private transient Mat kernel;
-			
+
 			MorphOp(int radius) {
 				this.radius = radius;
 			}
 			
 			@Override
 			public List<Mat> transformPadded(Mat input) {
-				opencv_imgproc.morphologyEx(input, input, getOp(), getKernel());
-//				OpenCVTools.applyToChannels(input,
-//						mat -> opencv_imgproc.morphologyEx(mat, mat, getOp(), getKernel()));
-				return Collections.singletonList(input);
+				try (var kernel = createDefaultKernel(radius)) {
+					opencv_imgproc.morphologyEx(input, input, getOp(), kernel);
+					return Collections.singletonList(input);
+				}
 			}
 			
 			protected abstract int getOp();
-			
-			private Mat getKernel() {
-				if (kernel == null || kernel.isNull())
-					kernel = createDefaultKernel(radius);
-				return kernel;
-			}
 
 			@Override
 			protected Padding calculatePadding() {
@@ -1447,7 +2120,6 @@ public class ImageOps {
 		static class FastMaximaOp extends PaddedOp {
 			
 			private int radius;
-			private transient Mat kernel;
 			
 			FastMaximaOp(int radius) {
 				this.radius = radius;
@@ -1455,17 +2127,13 @@ public class ImageOps {
 			
 			@Override
 			public List<Mat> transformPadded(Mat input) {
-				Mat temp = new Mat();
-				opencv_imgproc.morphologyEx(input, temp, opencv_imgproc.MORPH_DILATE, getKernel());
-				input.put(opencv_core.equals(input, temp));
-				temp.close();
-				return Collections.singletonList(input);
-			}
-			
-			private Mat getKernel() {
-				if (kernel == null || kernel.isNull())
-					kernel = createDefaultKernel(radius);
-				return kernel;
+				try (var kernel = createDefaultKernel(radius)) {
+					Mat temp = new Mat();
+					opencv_imgproc.morphologyEx(input, temp, opencv_imgproc.MORPH_DILATE, kernel);
+					input.put(opencv_core.equals(input, temp));
+					temp.close();
+					return Collections.singletonList(input);
+				}
 			}
 
 			@Override
@@ -1479,27 +2147,22 @@ public class ImageOps {
 		static class FastMinimaOp extends PaddedOp {
 			
 			private int radius;
-			private transient Mat kernel;
-			
+
 			FastMinimaOp(int radius) {
 				this.radius = radius;
 			}
 			
 			@Override
 			public List<Mat> transformPadded(Mat input) {
-				Mat temp = new Mat();
-				opencv_imgproc.morphologyEx(input, temp, opencv_imgproc.MORPH_ERODE, getKernel());
-				input.put(opencv_core.equals(input, temp));
-				temp.close();
-				return Collections.singletonList(input);
+				try (var kernel = createDefaultKernel(radius)) {
+					Mat temp = new Mat();
+					opencv_imgproc.morphologyEx(input, temp, opencv_imgproc.MORPH_ERODE, kernel);
+					input.put(opencv_core.equals(input, temp));
+					temp.close();
+					return Collections.singletonList(input);
+				}
 			}
 			
-			private Mat getKernel() {
-				if (kernel == null || kernel.isNull())
-					kernel = createDefaultKernel(radius);
-				return kernel;
-			}
-
 			@Override
 			protected Padding calculatePadding() {
 				return Padding.symmetric(radius);
@@ -1508,7 +2171,101 @@ public class ImageOps {
 		}
 		
 	}
-	
+
+
+	/**
+	 * Image transforms.
+	 */
+	@OpType("transforms")
+	public static class Transforms {
+
+		/**
+		 * Create a signed distance transform to each channel of an input image.
+		 * @param threshold the threshold to apply the input to ensure that it is a binary image.
+		 *                  If Double.NaN this is ignored, but then the image must be 8-bit binary.
+		 * @param clip the clip value used to clip the maximum signed distance.
+		 *             If &gt; 0 and finite, this is used to determine how much padding to request
+		 *             so that the output is reliable when applied to a tiled image.
+		 * @return the signed distance op
+		 */
+		public static ImageOp signedDistance(double threshold, double clip) {
+			return new SignedDistanceOp(threshold, clip);
+		}
+
+
+		@OpType("signed-distance")
+		static class SignedDistanceOp extends PaddedOp {
+
+			private double threshold;
+			private double clip;
+
+			SignedDistanceOp(double threshold, double clip) {
+				this.threshold = threshold;
+				this.clip = clip;
+			}
+
+			@Override
+			public List<Mat> transformPadded(Mat input) {
+				List<Mat> splitChannels = OpenCVTools.splitChannels(input);
+				for (var channel : splitChannels) {
+					processSingleChannelInPlace(channel);
+				}
+				return splitChannels;
+			}
+
+			private void processSingleChannelInPlace(Mat input) {
+				try (var scope = new PointerScope()) {
+					Mat binary = new Mat();
+					if (!Double.isNaN(threshold)) {
+						binary.put(opencv_core.greaterThan(input, threshold));
+					} else {
+						input.copyTo(binary);
+					}
+					// Distance transform of binary image
+					Mat dist = new Mat();
+					opencv_imgproc.distanceTransform(binary, dist, opencv_imgproc.DIST_L2, opencv_imgproc.DIST_MASK_PRECISE, opencv_core.CV_32F);
+
+					// Distance transform of inverted binary image
+					Mat distInvert = new Mat();
+					binary.put(opencv_core.equals(binary, 0));
+					opencv_imgproc.distanceTransform(binary, distInvert, opencv_imgproc.DIST_L2, opencv_imgproc.DIST_MASK_PRECISE, opencv_core.CV_32F);
+
+					// Signed distance transform
+					opencv_core.subtract(dist, distInvert, dist);
+
+					if (clip > 0 && Double.isFinite(clip)) {
+						dist.put(opencv_core.min(dist, clip));
+						dist.put(opencv_core.max(dist, -clip));
+					}
+					input.put(dist);
+				}
+			}
+
+			@Override
+			protected Padding calculatePadding() {
+				return clip > 0 && Double.isFinite(clip) ? Padding.symmetric((int)Math.ceil(clip)) : Padding.empty();
+			}
+
+			@Override
+			public List<ImageChannel> getChannels(List<ImageChannel> input) {
+				return ImageChannel.getChannelList(
+						input.stream().map(ImageChannel::getName).map(this::updateChannelName).toArray(String[]::new)
+				);
+			}
+
+			private String updateChannelName(String name) {
+				return String.format("%s signed-dist (%.2f, %.2f)", name, threshold, clip);
+			}
+
+			@Override
+			public PixelType getOutputType(PixelType type) {
+				return PixelType.FLOAT32;
+			}
+
+		}
+
+	}
+
 	
 	/**
 	 * Channel and color operations.
@@ -1742,7 +2499,7 @@ public class ImageOps {
 
 			@Override
 			public List<ImageChannel> getChannels(List<ImageChannel> channels) {
-				List<String> allNames = channels.stream().map(c -> c.getName()).toList();
+				List<String> allNames = channels.stream().map(ImageChannel::getName).toList();
 				String name = reduceName() + " [" + String.join(", ", allNames) + "]";
 				return ImageChannel.getChannelList(name);
 			}
@@ -2475,27 +3232,6 @@ public class ImageOps {
 				// Use FastMath - there are too many caveats with OpenCV's pow implementation
 				OpenCVTools.apply(input, d -> FastMath.pow(d, power));
 				return input;
-//				opencv_core.pow(input, power, input);
-//				// For non-integer powers, OpenCV uses the absolute value
-//				if (power == Math.rint(power))
-//					opencv_core.pow(input, power, input);
-//				else {
-//					opencv_core.pow(input, power, input);
-//					Mat mask = opencv_core.lessThan(input, 0.0).asMat();			    
-//					if (opencv_core.countNonZero(mask) != 0) {
-//						if (power < 0) {
-//							var nan = OpenCVTools.scalarMat(Double.NaN, opencv_core.CV_64F);
-//							input.setTo(nan, mask);
-//							nan.close();
-//						} else {
-//							var temp = OpenCVTools.scalarMat(0.0, opencv_core.CV_64F);
-//							opencv_core.subtract(temp, input, input, mask, input.depth());
-//							temp.close();
-//						}
-//					}
-//				    mask.close();
-//				}
-//				return input;
 			}
 			
 		}
@@ -2545,16 +3281,18 @@ public class ImageOps {
 			
 			@Override
 			public List<ImageChannel> getChannels(List<ImageChannel> channels) {
-				for (var t : ops)
+				for (var t : ops) {
 					channels = t.getChannels(channels);
+				}
 				return channels;
 			}
 			
 			@Override
 			public PixelType getOutputType(PixelType inputType) {
+				var outputType = inputType;
 				for (var t : ops)
-					inputType = t.getOutputType(inputType);
-				return inputType;
+					outputType = t.getOutputType(outputType);
+				return outputType;
 			}
 			
 			/**
@@ -2813,13 +3551,48 @@ public class ImageOps {
 	public static class ML {
 		
 		/**
-		 * Apply a {@link StatModel} to pixels to generate a prediction.
+		 * Apply am {@link TrainableStatModel} to pixels to generate a prediction.
 		 * @param statModel
 		 * @param requestProbabilities
 		 * @return
+		 * @see #predictionModel(PredictionModel, boolean, List)
+		 * @deprecated since v0.8.0
 		 */
-		public static ImageOp statModel(OpenCVStatModel statModel, boolean requestProbabilities) {
-			return new StatModelOp(statModel, requestProbabilities);
+		@Deprecated
+		public static ImageOp statModel(TrainableStatModel<? extends StatModel> statModel, boolean requestProbabilities) {
+			return new StatModelOp(statModel.getStatModel(), requestProbabilities);
+		}
+
+		/**
+		 * Apply a {@link PredictionModel} to pixels to generate a prediction.
+		 * <p>
+		 * This replaces {@link #statModel(TrainableStatModel, boolean)} in v0.8.0,
+		 * because it is more flexible.
+		 * @param model
+		 * @param requestProbabilities
+		 * @param outputs output channels to use.
+		 *              This may be any single string if classifications are output.
+		 *              Otherwise, it should give the name of the probability corresponding to each output channel,
+		 *              in order.
+		 * @return
+		 * @since v0.8.0
+		 */
+		public static ImageOp predictionModel(PredictionModel model, boolean requestProbabilities, List<ImageChannel> outputs) {
+			return new PredictionModelOp(model, requestProbabilities, outputs);
+		}
+
+		/**
+		 * Apply a {@link PredictionModel} to pixels to generate a prediction, giving a single-channel classification as
+		 * output (i.e. not probabilities).
+		 * <p>
+		 * This replaces {@link #statModel(TrainableStatModel, boolean)} in v0.8.0,
+		 * because it is more flexible.
+		 * @param model
+		 * @return
+		 * @since v0.8.0
+		 */
+		public static ImageOp predictionModel(PredictionModel model) {
+			return new PredictionModelOp(model, false, List.of(PredictionModelOp.DEFAULT_CLASSIFICATION_CHANNEL));
 		}
 		
 		/**
@@ -3009,15 +3782,69 @@ public class ImageOps {
 			}
 			
 		}
-		
-		
+
+		// New class added in v0.8.0 to replace StatModelOp,
+		// and to permit more prediction model implementations.
+		@OpType("prediction-model")
+		static class PredictionModelOp implements ImageOp {
+
+			private static final Logger logger = LoggerFactory.getLogger(PredictionModelOp.class);
+
+			private static final ImageChannel DEFAULT_CLASSIFICATION_CHANNEL = ImageChannel.getInstance("Channel", ColorTools.WHITE);
+			private static final ImageChannel DEFAULT_PROBABILITY_CHANNEL = ImageChannel.getInstance("Probability", ColorTools.WHITE);
+
+			private PredictionModel model;
+			private boolean requestProbabilities;
+			private List<ImageChannel> outputs;
+
+			PredictionModelOp(PredictionModel model, boolean requestProbabilities, List<ImageChannel> outputs) {
+				this.model = model;
+				this.requestProbabilities = requestProbabilities;
+				this.outputs = List.copyOf(outputs);
+				if (!requestProbabilities && outputs.size() > 1) {
+					logger.warn("Expect single-channel classification output, but output channels are {}", outputs);
+				}
+			}
+
+			@SuppressWarnings("unchecked")
+			@Override
+			public Mat apply(Mat input) {
+				return applyPredictionModel(model, input, input, requestProbabilities);
+			}
+
+			@Override
+			public PixelType getOutputType(PixelType inputType) {
+				if (requestProbabilities)
+					return PixelType.FLOAT32;
+				else
+					return model.getOutputType();
+			}
+
+			@Override
+			public List<ImageChannel> getChannels(List<ImageChannel> channels) {
+				if (outputs.isEmpty()) {
+					if (requestProbabilities) {
+						logger.warn("Output channels are unknown, will return a single channel");
+						return List.of(DEFAULT_PROBABILITY_CHANNEL);
+					}
+					return List.of(DEFAULT_CLASSIFICATION_CHANNEL);
+				} else {
+					return outputs;
+				}
+			}
+
+		}
+
+		// This was the main op before v0.8.0, because only OpenCV models were supported.
+		// It is retained for deserialization.
 		@OpType("opencv-statmodel")
 		static class StatModelOp implements ImageOp {
 
-			private OpenCVStatModel model;
+			private StatModel model;
 			private boolean requestProbabilities;
+			private volatile transient PredictionModelOp op;
 			
-			StatModelOp(OpenCVStatModel model, boolean requestProbabilities) {
+			StatModelOp(StatModel model, boolean requestProbabilities) {
 				this.model = model;
 				this.requestProbabilities = requestProbabilities;
 			}
@@ -3025,28 +3852,58 @@ public class ImageOps {
 			@SuppressWarnings("unchecked")
 			@Override
 			public Mat apply(Mat input) {
-				try (var scope = new PointerScope()) {
-					int w = input.cols();
-					int h = input.rows();
-					input.put(input.reshape(1, w * h));
-					var matResult = new Mat();
-					if (requestProbabilities) {
-						var temp = new Mat();
-						model.predict(input, temp, matResult);
-						temp.close();
-					} else
-						model.predict(input, matResult, null);
-					input.put(matResult.reshape(matResult.cols(), h));
-//					scope.deallocate();
-				}
-				return input;
-			}
-			
-			@Override
-			public PixelType getOutputType(PixelType inputType) {
-				return PixelType.FLOAT32;
+				return getPredictionOp().apply(input);
 			}
 
+			private ImageOp getPredictionOp() {
+				if (op == null) {
+					synchronized (this) {
+						if (op == null)
+							op = new PredictionModelOp(
+									OpenCVStatModels.wrapStatModel(model),
+									requestProbabilities,
+									List.of());
+					}
+				}
+				return op;
+			}
+
+			@Override
+			public PixelType getOutputType(PixelType inputType) {
+				return getPredictionOp().getOutputType(inputType);
+			}
+
+			public List<ImageChannel> getChannels(List<ImageChannel> channels) {
+				return getPredictionOp().getChannels(channels);
+			}
+
+		}
+
+		/**
+		 * Apply a prediction model
+		 * @param model the prediction model
+		 * @param input the input to the op
+		 * @param output mat to use for output; must not be null, may be the same as input
+		 * @param requestProbabilities true if probabilities should be returned, false otherwise
+		 * @return the same mat as output
+		 */
+		private static Mat applyPredictionModel(PredictionModel model, Mat input, Mat output, boolean requestProbabilities) {
+			try (var scope = new PointerScope()) {
+				int w = input.cols();
+				int h = input.rows();
+				// Temporarily use the output (which might be the same as the input)
+				// when reshaping, in an attempt to minimize memory use
+				output.put(input.reshape(1, w * h));
+				var matResult = new Mat();
+				if (requestProbabilities) {
+					var temp = new Mat();
+					model.predict(output, temp, matResult);
+					temp.close();
+				} else
+					model.predict(input, matResult, null);
+				output.put(matResult.reshape(matResult.cols(), h));
+			}
+			return output;
 		}
 		
 	}
@@ -3198,13 +4055,17 @@ public class ImageOps {
 		}
 		
 	}
-	
-	
-	static Mat stripPadding(Mat mat, Padding padding) {
+
+	/**
+	 * Utility function to strip the padding from a mat.
+	 * @param mat the input mat
+	 * @param padding the padding to remove
+	 * @return a copy of the central portion of the mat with padding remove,
+	 *         or the original mat if the padding was empty
+	 */
+	public static Mat stripPadding(Mat mat, Padding padding) {
 		if (padding.isEmpty())
 			return mat;
-//		return OpenCVTools.crop(mat, padding.getX1(), padding.getY1(),
-//				mat.cols()-padding.getXSum(), mat.rows()-padding.getYSum());
 		return mat.apply(new Rect(
 				padding.getX1(), padding.getY1(),
 				mat.cols()-padding.getXSum(), mat.rows()-padding.getYSum())).clone();

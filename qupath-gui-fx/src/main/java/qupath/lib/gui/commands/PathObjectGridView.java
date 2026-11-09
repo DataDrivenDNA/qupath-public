@@ -57,7 +57,6 @@ import javafx.scene.control.ToolBar;
 import javafx.scene.control.Tooltip;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.StackPane;
-import javafx.scene.text.Text;
 import javafx.stage.Stage;
 import javafx.util.Duration;
 import org.controlsfx.control.CheckComboBox;
@@ -130,16 +129,16 @@ public class PathObjectGridView implements ChangeListener<ImageData<BufferedImag
 
 
 	public static enum GridDisplaySize {
-			TINY("Tiny", 60),
-			SMALL("Small", 100),
-			MEDIUM("Medium", 200),
-			LARGE("Large", 300);
+			TINY("GridView.tiny", 60),
+			SMALL("GridView.small", 100),
+			MEDIUM("GridView.medium", 200),
+			LARGE("GridView.large", 300);
 		
 		private final String name;
 		private final int size;
 		
 		GridDisplaySize(final String name, final int size) {
-			this.name = name;
+			this.name = QuPathResources.getString(name);
 			this.size = size;
 		}
 		
@@ -262,7 +261,7 @@ public class PathObjectGridView implements ChangeListener<ImageData<BufferedImag
 		Comparator<PathObject> sorter;
 		if (measurementName.equals(QuPathResources.getString("GridView.classification"))) {
 			sorter = (po1, po2) -> {
-				Comparator<PathObject> comp = Comparator.comparing(po -> po.getPathClass() == null ? "Unclassified" : po.getPathClass().toString());
+				Comparator<PathObject> comp = Comparator.comparing(po -> po.getPathClass() == null ? PathClass.NULL_CLASS.toString() : po.getPathClass().toString());
 				return comp.compare(po1, po2);
 			};
 		} else {
@@ -550,8 +549,8 @@ public class PathObjectGridView implements ChangeListener<ImageData<BufferedImag
 	}
 
 
-	private static Text createPlaceholderText(String text) {
-		return GuiTools.createPlaceholderText(text);
+	private static Label createPlaceholderText(String text) {
+		return GuiTools.createPlaceholderLabel(text);
 	}
 	
 	class QuPathGridView extends StackPane {
@@ -562,7 +561,7 @@ public class PathObjectGridView implements ChangeListener<ImageData<BufferedImag
 		
 		private final IntegerProperty imageSize = new SimpleIntegerProperty();
 		
-		private final Text textEmpty = createPlaceholderText(QuPathResources.getString("GridView.noObjectsAvailable"));
+		private final Label textEmpty = createPlaceholderText(QuPathResources.getString("GridView.noObjectsAvailable"));
 		
 		QuPathGridView() {
 			imageSize.addListener(v -> updateChildren());

@@ -30,7 +30,6 @@ import java.awt.Color;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -63,22 +62,7 @@ public class TestOMETiffImageWriter {
 			assertTrue(bytes.length > 0);
 		} catch (IOException e) {
 			fail("Error writing to byte array: " + e.getLocalizedMessage(), e);
-			return;
 		}
-		// Haven't been able to read from in-memory image with Bio-Formats yet...
-//		String id = "anything.ome.tif";
-//		Location.mapFile(id, new ByteArrayHandle(bytes));
-//		try (var reader = new ImageReader()) {
-//			reader.setMetadataStore(MetadataTools.createOMEXMLMetadata());
-//			reader.setId(id);
-//			var bufferedReader = new BufferedImageReader(reader);
-//			var imgRead = bufferedReader.openImage(0);
-//			compareImages(img, imgRead);
-//			bufferedReader.close();
-//		} catch (Exception e) {
-//			fail("Error reading from byte array: " + e.getMessage());
-//			return;
-//		}
 	}
 
 	static BufferedImage createImage(int type) {
@@ -91,10 +75,6 @@ public class TestOMETiffImageWriter {
 		g2d.drawRect(10, 10, 64, 64);
 		g2d.dispose();
 		return img;
-	}
-
-	static void compareImages(BufferedImage imgOrig, BufferedImage imgRead) {
-		Arrays.equals(getRGB(imgOrig), getRGB(imgRead));
 	}
 
 	static int[] getRGB(BufferedImage img) {

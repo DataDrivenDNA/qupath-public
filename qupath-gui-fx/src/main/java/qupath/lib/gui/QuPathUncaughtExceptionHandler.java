@@ -27,6 +27,8 @@ package qupath.lib.gui;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import qupath.fx.dialogs.Dialogs;
+import qupath.lib.gui.localization.QuPathResources;
+import qupath.lib.images.cache.ImageCache;
 
 import java.lang.Thread.UncaughtExceptionHandler;
 import java.util.Objects;
@@ -58,23 +60,24 @@ class QuPathUncaughtExceptionHandler implements UncaughtExceptionHandler {
 				sameExceptionCount++;
 				// Don't continually log the full stack trace
 				if (sameExceptionCount > 3)
-					logger.error("{} (see full stack trace above, or use 'debug' log level)", e.getLocalizedMessage());
+					logger.error("{} (see full stack trace above, or use 'debug' log level)", e.getMessage());
 				else
-					logger.debug(e.getLocalizedMessage(), e);
+					logger.debug(e.getMessage(), e);
 				return;
 			} else
 				sameExceptionCount = 0;
 
 			if (e instanceof OutOfMemoryError) {
 				// Try to reclaim any memory we can
-				qupath.getImageRegionStore().clearCache(true);
-				Dialogs.showErrorNotification("Out of memory error",
-						"Out of memory! You may need to decrease the 'Number of parallel threads' in the preferences, "
-						+ "then restart QuPath.");
+				ImageCache.getSharedInstance().clearCache();
+				Dialogs.showErrorNotification(
+						QuPathResources.getString("QuPathUncaughtExceptionHandler.outOfMemory"),
+						QuPathResources.getString("QuPathUncaughtExceptionHandler.outOfMemoryDescription")
+				);
 				logger.error(e.getMessage(), e);
 			} else {
 				var commonActions = qupath.getCommonActions();
-				Dialogs.showErrorNotification("QuPath exception", e);
+				Dialogs.showErrorNotification(QuPathResources.getString("QuPathUncaughtExceptionHandler.quPathException"), e);
 				logger.error(e.getMessage(), e);
 				if (commonActions.SHOW_LOG != null)
 					commonActions.SHOW_LOG.handle(null);

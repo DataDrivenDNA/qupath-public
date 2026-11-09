@@ -221,3 +221,43 @@
 .titled-pane > .title .titled-button-pane .button {
   -fx-padding: 1 8 1 8;
 }
+
+/* For display brush limits around the cursor */
+.brush-limits > .ellipse {
+  -fx-stroke-width: 1;
+  -fx-fill: transparent;
+  -fx-stroke-dash-array: 1.5 4.5;
+  -fx-effect: dropshadow(three-pass-box, black, 3, 0, 1, 1);
+}
+
+.brush-limits.wand > * {
+  -fx-opacity: 0.65;
+}
+
+.brush-limits > .ellipse.dark {
+  -fx-stroke: black;
+}
+
+.brush-limits > .ellipse.light {
+  -fx-stroke: white;
+  -fx-stroke-dash-offset: 3;
+}
+
+/* Use bold font in titled pane title */
+.bold-title.titled-pane > .title > .text {
+  -fx-font-weight: bold;
+}
+
+/* Indicate that the viewer is still loading content */
+.viewer-loading {
+  -fx-background-color: rgba(0, 0, 0, 0.5);
+  -fx-text-fill: white;
+  -fx-font-size: 125%;
+  -fx-font-weight: bold;
+  -fx-padding: 5px;
+}
+
+.viewer-loading > .progress-indicator {
+  -fx-pref-width: 25px;
+  -fx-pref-height: 25px;
+}

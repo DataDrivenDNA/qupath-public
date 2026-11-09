@@ -31,7 +31,7 @@ import qupath.lib.common.ColorTools;
 import qupath.lib.common.GeneralTools;
 import qupath.lib.geom.Point2;
 import qupath.lib.gui.images.servers.PathHierarchyImageServer;
-import qupath.lib.gui.images.stores.DefaultImageRegionStore;
+import qupath.lib.images.stores.DefaultImageRegionStore;
 import qupath.lib.gui.prefs.PathPrefs;
 import qupath.lib.gui.tools.ColorToolsFX;
 import qupath.lib.gui.viewer.OverlayOptions;
@@ -223,7 +223,7 @@ public class HierarchyOverlay extends AbstractOverlay {
 				} catch (IllegalArgumentException e) {
 					// This can happen (rarely) in a multithreaded environment if the level of a detection changes.
 					// However, protecting against this fully by caching the level with integer boxing/unboxing would be expensive.
-					logger.debug("Exception requesting detections to paint: " + e.getLocalizedMessage(), e);
+                    logger.debug("Exception requesting detections to paint: {}", e.getLocalizedMessage(), e);
 					detectionsToPaint = paintableDetections;
 				}
 				// Paint selected objects at the end
@@ -262,10 +262,10 @@ public class HierarchyOverlay extends AbstractOverlay {
 				// If the image hasn't been updated, then we are viewing the stationary image - we want to wait for a full repaint then to avoid flickering;
 				// On the other hand, if a large image has been updated then we may be browsing quickly - better to repaint quickly while tiles may still be loading
 				if (paintCompletely) {
-					regionStore.paintRegionCompletely(overlayServer, g2d, shapeRegion, z, t, downsampleFactor, null, null, 5000);
+					regionStore.paintRegionCompletely(overlayServer, g2d, shapeRegion, z, t, downsampleFactor, null, 5000);
 				}
 				else {
-					regionStore.paintRegion(overlayServer, g2d, shapeRegion, z, t, downsampleFactor, null, null, null);
+					regionStore.paintRegion(overlayServer, g2d, shapeRegion, z, t, downsampleFactor, null, null);
 				}
 			}
 		}
@@ -313,24 +313,13 @@ public class HierarchyOverlay extends AbstractOverlay {
 			double requestedFontSize = overlayOptions.getFontSize();
 			if (requestedFontSize <= 0 || !Double.isFinite(requestedFontSize)) {
 				// Get it from the location font size instead
-				switch (PathPrefs.locationFontSizeProperty().get()) {
-				case HUGE:
-					requestedFontSize = 24;
-					break;
-				case LARGE:
-					requestedFontSize = 18;
-					break;
-				case SMALL:
-					requestedFontSize = 10;
-					break;
-				case TINY:
-					requestedFontSize = 8;
-					break;
-				case MEDIUM:
-				default:
-					requestedFontSize = 14;
-					break;
-				}
+                requestedFontSize = switch (PathPrefs.locationFontSizeProperty().get()) {
+                    case HUGE -> 24;
+                    case LARGE -> 18;
+                    case SMALL -> 10;
+                    case TINY -> 8;
+                    default -> 14;
+                };
 			}
 			double fontDownsample = Math.min(downsampleFactor, 16);
 			float fontSize = (float)(requestedFontSize * fontDownsample);
@@ -438,7 +427,7 @@ public class HierarchyOverlay extends AbstractOverlay {
 	 */
 	public void clearCachedOverlay() {
 		if (regionStore != null && overlayServer != null)
-			regionStore.clearCacheForServer(overlayServer);
+			regionStore.getCache().clearCacheForServer(overlayServer.getPath());
 	}
 	
 	/**
@@ -447,7 +436,7 @@ public class HierarchyOverlay extends AbstractOverlay {
 	 */
 	public void clearCachedOverlayForRegion(ImageRegion region) {
 		if (regionStore != null && overlayServer != null)
-			regionStore.clearCacheForRequestOverlap(RegionRequest.createInstance(overlayServer.getPath(), 1, region));
+			regionStore.getCache().clearCacheForRequestOverlap(RegionRequest.createInstance(overlayServer.getPath(), 1, region));
 	}
 
 	

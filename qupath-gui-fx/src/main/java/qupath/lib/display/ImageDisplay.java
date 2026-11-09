@@ -4,7 +4,7 @@
  * %%
  * Copyright (C) 2014 - 2016 The Queen's University of Belfast, Northern Ireland
  * Contact: IP Management (ipmanagement@qub.ac.uk)
- * Copyright (C) 2018 - 2025 QuPath developers, The University of Edinburgh
+ * Copyright (C) 2018 - 2026 QuPath developers, The University of Edinburgh
  * %%
  * QuPath is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as
@@ -45,12 +45,12 @@ import org.slf4j.LoggerFactory;
 import qupath.lib.analysis.stats.Histogram;
 import qupath.lib.common.ColorTools;
 import qupath.lib.display.ChannelDisplayInfo.ModifiableChannelDisplayInfo;
-import qupath.lib.gui.images.stores.AbstractImageRenderer;
+import qupath.lib.images.stores.AbstractImageRenderer;
 import qupath.lib.gui.prefs.PathPrefs;
 import qupath.lib.images.ImageData;
+import qupath.lib.images.cache.ImageCache;
 import qupath.lib.images.servers.ImageServer;
 import qupath.lib.images.servers.ImageServerMetadata;
-import qupath.lib.images.servers.ImageServerProvider;
 import qupath.lib.images.servers.PixelType;
 import qupath.lib.regions.RegionRequest;
 
@@ -735,13 +735,7 @@ public class ImageDisplay extends AbstractImageRenderer {
 	}
 
 
-	/**
-	 * Get a string representation of a transformed pixel value, using the currently-selected channels.
-	 * @param img image providing the value
-	 * @param x x-coordinate of the pixel
-	 * @param y y-coordinate of the pixels
-	 * @return a String representation of the pixel's transformed value
-	 */
+	@Override
 	public String getTransformedValueAsString(BufferedImage img, int x, int y) {
 		if (selectedChannels.isEmpty() || selectedChannels.getFirst() == null)
 			return "";
@@ -799,10 +793,15 @@ public class ImageDisplay extends AbstractImageRenderer {
 		double downsample = server.getDownsampleForResolution(getPreferredHistogramPyramidLevel(server));
 		var request = RegionRequest.createInstance(server.getPath(), downsample, 0, 0, server.getWidth(), server.getHeight(),
 				server.nZSlices()/2, server.nTimepoints()/2);
-		map.put(request, server.readRegion(request));
-		// Before v0.6.0 we tried to read all z-slices and time points - but this could be much too expensive
-		// (and also require too much memory)
-		return map;
+		var cache = ImageCache.getSharedInstance();
+		try {
+			map.put(request, cache.requestImageTile(request, server).get());
+			// Before v0.6.0 we tried to read all z-slices and time points - but this could be much too expensive
+			// (and also require too much memory)
+			return map;
+		} catch (Exception e) {
+			throw new IOException(e);
+		}
 	}
 
     /**
@@ -950,8 +949,7 @@ public class ImageDisplay extends AbstractImageRenderer {
 		// If we don't have anything, search the main cache
 		if (images.isEmpty()) {
 			double downsample = server.getDownsampleForResolution(server.nResolutions()-1);
-			var cache = ImageServerProvider.getCache(BufferedImage.class);
-			cache.entrySet()
+			ImageCache.getSharedInstance().asMap().entrySet()
 					.stream()
 					.filter(e -> e.getKey().getPath().equals(server.getPath()) &&
 							e.getKey().getDownsample() == downsample)

@@ -3,7 +3,7 @@ package qupath.lib.gui.background;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import qupath.lib.gui.images.stores.ImageRegionStoreFactory;
+import qupath.lib.images.stores.DefaultImageRegionStore;
 import qupath.lib.gui.tools.FxTestTools;
 import qupath.lib.gui.viewer.*;
 import qupath.lib.images.ImageData;
@@ -103,7 +103,7 @@ class TestBackgroundImageLoad {
         }, ImageData.ImageType.BRIGHTFIELD_H_DAB);
     }
     private static final class ViewerFixture implements AutoCloseable {
-        final qupath.lib.gui.images.stores.DefaultImageRegionStore store = ImageRegionStoreFactory.createImageRegionStore(1024*1024);
+        final DefaultImageRegionStore store = DefaultImageRegionStore.getSharedInstance();
         final BackgroundImageLoad loads = new BackgroundImageLoad(message -> {});
         final ImageData<BufferedImage> source = data("current", new AtomicBoolean());
         final QuPathViewer viewer;
@@ -114,7 +114,7 @@ class TestBackgroundImageLoad {
             var current = viewer.getImageData();
             FxTestTools.call(() -> { viewer.closeViewer(); return null; });
             if (current != null && current != source) current.close();
-            source.close(); store.close();
+            source.close();
         }
     }
 }

@@ -23,7 +23,7 @@ package qupath.lib.gui.history;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import qupath.lib.common.GeneralTools;
+import qupath.lib.common.MemoryTools;
 import qupath.lib.io.PathIO;
 import java.io.*;
 import java.util.ArrayDeque;
@@ -74,7 +74,7 @@ public class SerializableUndoRedoStack<T> {
     synchronized void addSerialized(byte[] bytes, int historySize) {
         if (bytes == null) return;
         if (current != null) {
-            if (GeneralTools.estimateAvailableMemory() < current.length * 1.5) undoStack.clear();
+            if (MemoryTools.getTotalFreeMemory().orElse(MemoryTools.getCurrentFreeMemory()) < current.length * 1.5) undoStack.clear();
             else undoStack.push(current);
         }
         current = bytes;

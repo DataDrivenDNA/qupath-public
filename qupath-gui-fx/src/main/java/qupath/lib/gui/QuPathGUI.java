@@ -31,6 +31,9 @@ import qupath.lib.gui.background.ViewerEditGuard;
 import com.google.common.collect.BiMap;
 import com.google.common.collect.HashBiMap;
 import ij.IJ;
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
+import java.util.Optional;
 import javafx.application.Application;
 import javafx.application.HostServices;
 import javafx.application.Platform;
@@ -50,18 +53,21 @@ import javafx.collections.ObservableList;
 import javafx.embed.swing.JFXPanel;
 import javafx.event.ActionEvent;
 import javafx.event.EventHandler;
+import javafx.geometry.Insets;
 import javafx.geometry.Rectangle2D;
 import javafx.scene.Cursor;
 import javafx.scene.Node;
 import javafx.scene.Parent;
 import javafx.scene.Scene;
 import javafx.scene.control.ButtonType;
+import javafx.scene.control.Label;
 import javafx.scene.control.Menu;
 import javafx.scene.control.MenuBar;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.SeparatorMenuItem;
 import javafx.scene.control.Tab;
 import javafx.scene.control.TabPane;
+import javafx.scene.control.TextField;
 import javafx.scene.control.TextInputControl;
 import javafx.scene.control.ToolBar;
 import javafx.scene.image.Image;
@@ -72,9 +78,11 @@ import javafx.scene.input.KeyEvent;
 import javafx.scene.input.MouseButton;
 import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.BorderPane;
+import javafx.scene.layout.HeaderBar;
 import javafx.scene.layout.Pane;
 import javafx.stage.Screen;
 import javafx.stage.Stage;
+import javafx.stage.StageStyle;
 import javafx.stage.Window;
 import javafx.stage.WindowEvent;
 import org.controlsfx.control.action.Action;
@@ -99,8 +107,7 @@ import qupath.lib.gui.actions.menus.Menus;
 import qupath.lib.gui.commands.LogViewerCommand;
 import qupath.lib.gui.commands.ProjectCommands;
 import qupath.lib.gui.commands.TMACommands;
-import qupath.lib.gui.images.stores.DefaultImageRegionStore;
-import qupath.lib.gui.images.stores.ImageRegionStoreFactory;
+import qupath.lib.images.stores.DefaultImageRegionStore;
 import qupath.lib.gui.localization.QuPathResources;
 import qupath.lib.gui.logging.LogManager;
 import qupath.lib.gui.panes.ImageDetailsPane;
@@ -115,6 +122,7 @@ import qupath.lib.gui.scripting.QPEx;
 import qupath.lib.gui.scripting.ScriptEditor;
 import qupath.lib.gui.scripting.languages.GroovyLanguage;
 import qupath.lib.gui.scripting.languages.ScriptLanguageProvider;
+import qupath.lib.gui.tools.CommandFinderTools;
 import qupath.lib.gui.tools.GuiTools;
 import qupath.lib.gui.tools.MenuTools;
 import qupath.lib.gui.viewer.DragDropImportListener;
@@ -125,6 +133,7 @@ import qupath.lib.gui.viewer.tools.PathTool;
 import qupath.lib.gui.viewer.tools.PathTools;
 import qupath.lib.images.ImageData;
 import qupath.lib.images.ImageData.ImageType;
+import qupath.lib.images.cache.ImageCache;
 import qupath.lib.images.servers.ImageServer;
 import qupath.lib.images.servers.ImageServerBuilder.ServerBuilder;
 import qupath.lib.images.servers.ImageServerBuilder.UriImageSupport;
@@ -161,6 +170,7 @@ import java.net.URISyntaxException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.text.MessageFormat;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -279,7 +289,10 @@ public class QuPathGUI {
 		// Note that the order is sometimes important.
 		toolManager = ToolManager.create();
 		threadPoolManager = SharedThreadPoolManager.create();
-		imageRegionStore = ImageRegionStoreFactory.createImageRegionStore();
+
+		imageRegionStore = DefaultImageRegionStore.getSharedInstance();
+		imageRegionStore.getCache().setMaxSizeByPercent(PathPrefs.tileCachePercentageProperty().get());
+
 		prefsPane = new PreferencePane();
 		viewerManager = ViewerManager.create(this);
 		pathClassManager = PathClassManager.create();
@@ -637,7 +650,7 @@ public class QuPathGUI {
 		Scene scene;
 		try {
 			Rectangle2D bounds = Screen.getPrimary().getVisualBounds();
-			scene = new Scene(content,
+			scene = new Scene(tryToAddHeaderBar(content),
                     bounds.getWidth()*0.8,
                    bounds.getHeight()*0.8);
 		} catch (Exception e) {
@@ -649,9 +662,59 @@ public class QuPathGUI {
 		return scene;
 	}
 
+	private Parent tryToAddHeaderBar(Parent content) {
+		try {
+			var header = new HeaderBar();
+			var title = new Label();
+			title.textProperty().bind(titleBinding);
+			title.setStyle("-fx-font-weight: bold;");
+			// Searching for the TextField would ideally not be necessary, but the command finder would need refactoring
+			var commandFinder = CommandFinderTools.createMinimalCommandFinderPane(this);
+			commandFinder.getChildren().stream()
+					.filter(TextField.class::isInstance)
+					.map(TextField.class::cast)
+					.findFirst().ifPresent(tf -> {
+				tf.setPrefColumnCount(20);
+				tf.setFocusTraversable(true);
+				var previousFocusOwner = new SimpleObjectProperty<Node>();
+				var actionSearch = new Action("Focus search field",
+						e -> tf.requestFocus());
+				actionSearch.setAccelerator(new KeyCodeCombination(
+						KeyCode.F, KeyCombination.SHORTCUT_DOWN));
+				var comboResetFocus = new KeyCodeCombination(KeyCode.ESCAPE);
+				tf.addEventFilter(KeyEvent.ANY, e -> {
+					if (comboResetFocus.match(e) && tf.isFocused()) {
+						if (previousFocusOwner.get() != null)
+							previousFocusOwner.get().requestFocus();
+						e.consume();
+					}
+				});
+				registerAccelerator(actionSearch);
+				content.addEventFilter(KeyEvent.ANY, event -> {
+							if (actionSearch.getAccelerator().match(event)) {
+								previousFocusOwner.set(content.getScene().getFocusOwner());
+								actionSearch.handle(new ActionEvent());
+								event.consume();
+							}
+						});
+			});
+			HeaderBar.setMargin(commandFinder, new Insets(0, 5, 0, 5));
+			header.setRight(commandFinder);
+			header.setCenter(title);
+			var pane = new BorderPane(content);
+			pane.setTop(header);
+			return pane;
+		} catch (RuntimeException e) {
+			logger.warn("Header bar is not supported (requires JavaFX 27, or -Djavafx.enablePreview=true)");
+			return content;
+		}
+	}
 	
 	
 	private void initializeStage(Scene scene) {
+		if (scene.getRoot().getChildrenUnmodifiable().stream().anyMatch(HeaderBar.class::isInstance)) {
+			stage.initStyle(StageStyle.EXTENDED);
+		}
 		stage.setScene(scene);
 		stage.setOnCloseRequest(this::handleCloseMainStageRequest);
 		stage.getIcons().addAll(loadIconList());
@@ -738,14 +801,22 @@ public class QuPathGUI {
 	private void populateScriptingMenu(Menu menuScripting) {
 		Objects.requireNonNull(menuScripting);
 		ScriptEditor editor = getScriptEditor();
-		var sharedScriptMenuLoader = new ScriptMenuLoader("Shared scripts...", PathPrefs.scriptsPathProperty(), this::getScriptEditor);
+		var sharedScriptMenuLoader = new ScriptMenuLoader(
+				QuPathResources.getString("QuPathGUI.sharedScripts"),
+				PathPrefs.scriptsPathProperty(),
+				this::getScriptEditor
+		);
 		
 		StringBinding projectScriptsPath = Bindings.createStringBinding(() -> {
 			var project = getProject();
 			File dir = project == null ? null : Projects.getBaseDirectory(project);
 			return dir == null ? null : new File(dir, "scripts").getAbsolutePath();
 		}, projectProperty);
-		var projectScriptMenuLoader = new ScriptMenuLoader("Project scripts...", projectScriptsPath, this::getScriptEditor);
+		var projectScriptMenuLoader = new ScriptMenuLoader(
+				QuPathResources.getString("QuPathGUI.projectScripts"),
+				projectScriptsPath,
+				this::getScriptEditor
+		);
 		projectScriptMenuLoader.getMenu().visibleProperty().bind(
 				projectProperty.isNotNull().and(menuVisibilityManager.ignorePredicateProperty().not())
 				);
@@ -755,7 +826,11 @@ public class QuPathGUI {
 			Path path = scriptDirectoryProperty.get();
 			return path == null ? null : path.toString();
 		}, scriptDirectoryProperty);
-		ScriptMenuLoader userScriptMenuLoader = new ScriptMenuLoader("User scripts...", userScriptsPath, this::getScriptEditor);
+		ScriptMenuLoader userScriptMenuLoader = new ScriptMenuLoader(
+				QuPathResources.getString("QuPathGUI.userScripts"),
+				userScriptsPath,
+				this::getScriptEditor
+		);
 	
 		MenuTools.addMenuItems(
 				menuScripting,
@@ -854,10 +929,10 @@ public class QuPathGUI {
 	
 	
 	private void initializeImageTileCache() {
-		PathPrefs.tileCachePercentageProperty().addListener((v, o, n) -> {
-			imageRegionStore.getCache().clear();
+		PathPrefs.tileCachePercentageProperty().subscribe(n -> {
+			if (n != null)
+				ImageCache.getSharedInstance().setMaxSizeByPercent(n.doubleValue());
 		});
-		ImageServerProvider.setCache(imageRegionStore.getCache(), BufferedImage.class);
 		// Turn off the use of ImageIODiskCache (it causes some trouble)
 		ImageIO.setUseCache(false);
 	}
@@ -1013,7 +1088,10 @@ public class QuPathGUI {
 					long time = System.currentTimeMillis();
 					if (time - lastMousePressedWarning > 5000L) {
 						if (scriptRunning.get()) {
-							Dialogs.showWarningNotification("Script running", "Please wait until the current script has finished!");
+							Dialogs.showWarningNotification(
+									QuPathResources.getString("QuPathGUI.scriptRunning"),
+									QuPathResources.getString("QuPathGUI.waitUntilScriptFinished")
+							);
 							lastMousePressedWarning = time;
 						} else if (pluginRunning.get()) {
 							logger.warn("Please wait until the current command is finished!");
@@ -1051,12 +1129,15 @@ public class QuPathGUI {
 		Collection<? extends QuPathViewer> unsavedViewers = getViewersWithUnsavedChanges();
 		if (!unsavedViewers.isEmpty()) {
 			if (unsavedViewers.size() == 1) {
-				if (!requestToCloseViewer(unsavedViewers.iterator().next(), "Quit QuPath")) {
+				if (!requestToCloseViewer(unsavedViewers.iterator().next(), QuPathResources.getString("QuPathGUI.quit"))) {
 					logger.trace("Pressed no to close viewer!");
 					e.consume();
 					return;
 				}
-			} else if (!Dialogs.showYesNoDialog("Quit QuPath", "Are you sure you want to quit?\n\nUnsaved changes in " + unsavedViewers.size() + " viewers will be lost.")) {
+			} else if (!Dialogs.showYesNoDialog(
+					QuPathResources.getString("QuPathGUI.quit"),
+					MessageFormat.format(QuPathResources.getString("QuPathGUI.quitConfirmation"), unsavedViewers.size())
+			)) {
 				logger.trace("Pressed no to quit window!");
 				e.consume();
 				return;
@@ -1071,7 +1152,10 @@ public class QuPathGUI {
 		
 		// Warn if there is a script running
         if (scriptRunning.get()) {
-			if (!Dialogs.showYesNoDialog("Quit QuPath", "A script is currently running! Quit anyway?")) {
+			if (!Dialogs.showYesNoDialog(
+					QuPathResources.getString("QuPathGUI.quit"),
+					QuPathResources.getString("QuPathGUI.scriptCurrentlyRunning")
+			)) {
 				logger.trace("Pressed no to quit window with script running!");
 				e.consume();
 				return;
@@ -1084,13 +1168,12 @@ public class QuPathGUI {
 			try {
 				project.syncChanges();
 			} catch (IOException ex) {
-				logger.error("Error syncing project: " + ex.getLocalizedMessage(), e);
+                logger.error("Error syncing project: {}", ex.getLocalizedMessage(), ex);
 			}
 		}
 
-		// Close the region store to stop any painting requests
-		if (imageRegionStore != null)
-			imageRegionStore.close();
+		// Stop caching tiles
+		ImageCache.getSharedInstance().close();
 
 		// Save the PathClasses
 		pathClassManager.savePathClassesToPreferences();
@@ -1174,7 +1257,10 @@ public class QuPathGUI {
 				return false;
 			}
 		} else {
-			Dialogs.showErrorMessage("Show URL", "Sorry, unable to launch a browser to open \n" + url);
+			Dialogs.showErrorMessage(
+					QuPathResources.getString("QuPathGUI.showUrl"),
+					MessageFormat.format(QuPathResources.getString("QuPathGUI.unableToLaunchBrowser"), url)
+			);
 			return false;
 		}
 	}
@@ -1197,7 +1283,7 @@ public class QuPathGUI {
 				}
 			}
 		} catch (URISyntaxException e) {
-			logger.debug("Exception converting to URI: " + e.getLocalizedMessage(), e);
+            logger.debug("Exception converting to URI: {}", e.getLocalizedMessage(), e);
 		}
 		try {
 			return Paths.get(
@@ -1207,7 +1293,7 @@ public class QuPathGUI {
 					.getLocation()
 					.toURI()).getParent();
 		} catch (Exception e) {
-			logger.error("Error identifying code directory: " + e.getLocalizedMessage(), e);
+            logger.error("Error identifying code directory: {}", e.getLocalizedMessage(), e);
 			return null;
 		}
 	}
@@ -1298,14 +1384,23 @@ public class QuPathGUI {
 		
 		// Create a recent projects list in the File menu
 		ObservableList<URI> recentProjects = PathPrefs.getRecentProjectList();
-		Menu menuRecent = GuiTools.createRecentItemsMenu("Recent projects...", recentProjects, uri -> {
+		Menu menuRecent = GuiTools.createRecentItemsMenu(QuPathResources.getString("QuPathGUI.recentProjects"), recentProjects, uri -> {
 			Project<BufferedImage> project;
 			try {
 				project = ProjectIO.loadProject(uri, BufferedImage.class);
 				setProject(project);
 			} catch (Exception e1) {
-				Dialogs.showErrorMessage("Project error", "Cannot find project " + uri);
 				logger.error("Error loading project", e1);
+				Optional<ButtonType> remove = Dialogs.builder()
+						.error()
+						.owner(this.stage)
+						.buttons(ButtonType.YES, ButtonType.NO)
+						.title(QuPathResources.getString("QuPathGUI.projectError"))
+						.contentText(MessageFormat.format(QuPathResources.getString("QuPathGUI.cannotFindProject"),
+								uri == null ? null : URLDecoder.decode(uri.toString(), StandardCharsets.UTF_8)))
+						.showAndWait();
+				remove.filter(buttonType -> buttonType == ButtonType.YES)
+						.ifPresent((b) -> recentProjects.remove(uri));
 			}
 		});
 		
@@ -1340,13 +1435,13 @@ public class QuPathGUI {
 					Image icon = loadIcon(i);
 					icons.add(icon);
 				} catch (IOException e) {
-					logger.warn("Unable to load icon for size " + i + ": " + e.getLocalizedMessage(), e);
+                    logger.warn("Unable to load icon for size {}: {}", i, e.getLocalizedMessage(), e);
 				}
 			}
 			if (!icons.isEmpty())
 				return icons;
 		} catch (Exception e) {
-			logger.error("Exception loading icons: " + e.getLocalizedMessage(), e);
+            logger.error("Exception loading icons: {}", e.getLocalizedMessage(), e);
 		}
 		return Collections.emptyList();
 	}
@@ -1421,7 +1516,10 @@ public class QuPathGUI {
 				if (getAllViewers().size() == 1)
 					viewer = getViewer();
 				else {
-					Dialogs.showErrorMessage("Open saved data", "Please specify the viewer where the data should be opened!");
+					Dialogs.showErrorMessage(
+							QuPathResources.getString("QuPathGUI.openSavedData"),
+							QuPathResources.getString("QuPathGUI.specifyViewerData")
+					);
 					return false;
 				}
 			}
@@ -1439,7 +1537,7 @@ public class QuPathGUI {
 			var request = backgroundImageLoad.begin(viewer);
 			var imageData = viewer.getImageData();
 			if (promptToSaveChanges && imageData != null && imageData.isChanged()
-					&& !isReadOnly() && !promptToSaveChangesOrCancel("Save changes", imageData)) return false;
+					&& !isReadOnly() && !promptToSaveChangesOrCancel(QuPathResources.getString("QuPathGUI.saveChanges"), imageData)) return false;
 			if (!request.current()) return false;
 
 			var storedBuilder = BackgroundTasks.io(() -> {
@@ -1458,7 +1556,7 @@ public class QuPathGUI {
 				for (var uri : builder.getURIs()) {
 					var path = GeneralTools.toPath(uri);
 					if (path != null && !Files.exists(path)) {
-						var replacement = FileChoosers.promptForFilePathOrURI("Set path to missing image", path.toString());
+						var replacement = FileChoosers.promptForFilePathOrURI(QuPathResources.getString("QuPathGUI.pathToMissingImage"), path.toString());
 						if (replacement == null) return false;
 						try { replacements.put(uri, GeneralTools.toURI(replacement)); }
 						catch (URISyntaxException error) { throw new IOException(error); }
@@ -1471,7 +1569,7 @@ public class QuPathGUI {
 				var candidate = chosenBuilder == null ? PathIO.<BufferedImage>readImageData(file)
 						: PathIO.readImageData(file.toPath(), chosenBuilder);
 				try {
-					imageRegionStore.getThumbnail(candidate.getServer(), 0, 0, true);
+					imageRegionStore.getThumbnailCache().getThumbnail(candidate.getServer());
 					return candidate;
 				} catch (Exception error) {
 					try { candidate.close(); } catch (Exception close) { error.addSuppressed(close); }
@@ -1522,7 +1620,7 @@ public class QuPathGUI {
 			boolean loaded = request.load(() -> {
 				var candidate = entry.readImageData();
 				try {
-					imageRegionStore.getThumbnail(candidate.getServer(), 0, 0, true);
+					imageRegionStore.getThumbnailCache().getThumbnail(candidate.getServer());
 					return candidate;
 				} catch (Exception error) {
 					try { candidate.close(); } catch (Exception close) { error.addSuppressed(close); }
@@ -1535,14 +1633,20 @@ public class QuPathGUI {
 				var setType = PathPrefs.imageTypeSettingProperty().get();
 				if (setType == ImageTypeSetting.AUTO_ESTIMATE || setType == ImageTypeSetting.PROMPT) {
 					var type = GuiTools.estimateImageType(loadedData.getServer(),
-							imageRegionStore.getThumbnail(loadedData.getServer(), 0, 0, true));
+							imageRegionStore.getThumbnailCache().getThumbnail(loadedData.getServer()));
 					if (setType == ImageTypeSetting.PROMPT) ImageDetailsPane.promptToSetImageType(loadedData, type);
 					else { loadedData.setImageType(type); loadedData.setChanged(false); }
 				}
 			}
 			return true;
 		} catch (Exception e) {
-			Dialogs.showErrorMessage("Load ImageData", "Error attempting to load image data\n" + e.getLocalizedMessage());
+			Dialogs.showErrorMessage(
+					QuPathResources.getString("QuPathGUI.loadImageData"),
+					MessageFormat.format(
+							QuPathResources.getString("QuPathGUI.errorLoadingImageData"),
+							e.getLocalizedMessage()
+					)
+			);
 			logger.error(e.getMessage(), e);
 			return false;
 		}
@@ -1573,9 +1677,12 @@ public class QuPathGUI {
 		String name = entry == null ? ServerTools.getDisplayableImageName(imageData.getServer()) : entry.getImageName();
 		var owner = FXUtils.getWindow(getViewer().getView());
 		var response = Dialogs.builder()
-				.title("Save changes")
+				.title(QuPathResources.getString("QuPathGUI.saveChanges"))
 				.owner(owner)
-				.contentText("Save changes to " + name + "?")
+				.contentText(MessageFormat.format(
+						QuPathResources.getString("QuPathGUI.saveChangesTo"),
+						name
+				))
 				.buttons(ButtonType.YES, ButtonType.NO, ButtonType.CANCEL)
 				.showAndWait()
 				.orElse(ButtonType.CANCEL);
@@ -1588,8 +1695,8 @@ public class QuPathGUI {
 			if (entry == null) {
 				String lastPath = imageData.getLastSavedPath();
 				File lastFile = lastPath == null ? null : new File(lastPath);
-				File file = FileChoosers.promptToSaveFile("Save data", lastFile,
-						FileChoosers.createExtensionFilter("QuPath data files", PathPrefs.getSerializationExtension()));
+				File file = FileChoosers.promptToSaveFile(QuPathResources.getString("QuPathGUI.saveData"), lastFile,
+						FileChoosers.createExtensionFilter(QuPathResources.getString("QuPathGUI.dataFiles"), PathPrefs.getSerializationExtension()));
 				if (file == null)
 					return false;
 				if (!BackgroundImageSave.save(imageData, null, file.toPath())) return false;
@@ -1601,7 +1708,13 @@ public class QuPathGUI {
 			}
 			return true;
 		} catch (IOException e) {
-			Dialogs.showErrorMessage("Save ImageData", "Error attempting to save image data\n" + e.getLocalizedMessage());
+			Dialogs.showErrorMessage(
+					QuPathResources.getString("QuPathGUI.saveImageData"),
+					MessageFormat.format(
+							QuPathResources.getString("QuPathGUI.errorSaveImageData"),
+							e.getLocalizedMessage()
+					)
+			);
 			logger.error(e.getMessage(), e);
 			return false;
 		}
@@ -1621,7 +1734,13 @@ public class QuPathGUI {
 		try {
 			return openImage(getViewer(), null, true, false);
 		} catch (IOException e) {
-			Dialogs.showErrorMessage("Open image", "Error opening image\n" + e.getLocalizedMessage());
+			Dialogs.showErrorMessage(
+					QuPathResources.getString("QuPathGUI.openImage"),
+					MessageFormat.format(
+							QuPathResources.getString("QuPathGUI.errorOpeningImage"),
+							e.getLocalizedMessage()
+					)
+			);
 			logger.error(e.getMessage(), e);
 			return false;
 		}
@@ -1639,7 +1758,13 @@ public class QuPathGUI {
 		try {
 			return openImage(getViewer(), null, true, true);
 		} catch (IOException e) {
-			Dialogs.showErrorMessage("Open image", "Error opening image\n" + e.getLocalizedMessage());
+			Dialogs.showErrorMessage(
+					QuPathResources.getString("QuPathGUI.openImage"),
+					MessageFormat.format(
+							QuPathResources.getString("QuPathGUI.errorOpeningImage"),
+							e.getLocalizedMessage()
+					)
+			);
 			logger.error(e.getMessage(), e);
 			return false;
 		}
@@ -1668,7 +1793,10 @@ public class QuPathGUI {
 			if (getAllViewers().size() == 1)
 				viewer = getViewer();
 			else {
-				Dialogs.showErrorMessage("Open image", "Please specify the viewer where the image should be opened!");
+				Dialogs.showErrorMessage(
+						QuPathResources.getString("QuPathGUI.openImage"),
+						QuPathResources.getString("QuPathGUI.specifyViewerImage")
+				);
 				return false;
 			}
 		}
@@ -1694,7 +1822,7 @@ public class QuPathGUI {
 		File fileNew = null;
 		if (pathNew == null) {
 			if (includeURLs) {
-				pathNew = FileChoosers.promptForFilePathOrURI("Choose path", pathOld);
+				pathNew = FileChoosers.promptForFilePathOrURI(QuPathResources.getString("QuPathGUI.choosePath"), pathOld);
 				if (pathNew == null)
 					return false;
 				fileNew = new File(pathNew);
@@ -1724,8 +1852,8 @@ public class QuPathGUI {
 						return true;
 					}
 				} catch (Exception e) {
-					Dialogs.showErrorMessage("Open project", e);
-					logger.error("Error opening project " + fileNew.getAbsolutePath(), e);
+					Dialogs.showErrorMessage(QuPathResources.getString("QuPathGUI.openProject"), e);
+                    logger.error("Error opening project {}", fileNew.getAbsolutePath(), e);
 					return false;
 				}
 		}
@@ -1738,7 +1866,7 @@ public class QuPathGUI {
 				List<ProjectImageEntry<BufferedImage>> entries = ProjectCommands.promptToImportImages(this, pathNew);
 				if (entries.isEmpty())
 					return false;
-				return openImageEntry(entries.get(0));
+				return openImageEntry(entries.getFirst());
 			}
 			if (viewer.getImageData() != null && !checkSaveChanges(viewer.getImageData())) return false;
             if (!request.current()) return false;
@@ -1749,9 +1877,13 @@ public class QuPathGUI {
 			List<ServerBuilder<BufferedImage>> builders = support == null ? Collections.emptyList() : support.getBuilders();
 			
 			if (builders.isEmpty()) {
-				String name = fileNew == null ? pathNew : fileNew.getName();
-				String message = "No supported image reader found for " + name + ".\nSee View > Show log for more details";
-				Dialogs.showErrorMessage("Unable to build server", message);
+				Dialogs.showErrorMessage(
+						QuPathResources.getString("QuPathGUI.unableToBuildServer"),
+						MessageFormat.format(
+								QuPathResources.getString("QuPathGUI.noSupportedImageReaderFound"),
+								fileNew == null ? pathNew : fileNew.getName()
+						)
+				);
 				return false;
 			}
 			else if (builders.size() == 1) {
@@ -1762,14 +1894,20 @@ public class QuPathGUI {
 				}
 			} else {
 				var selector = ServerSelector.createFromBuilders(builders);
-				serverNew = selector.promptToSelectImage("Open", false);
+				serverNew = selector.promptToSelectImage(QuPathResources.getString("QuPathGUI.open"), false);
 				if (serverNew == null)
 					return false;
 			}
 
 			if (serverNew != null) {
 				if (pathOld != null && prompt && !viewer.getHierarchy().isEmpty()) {
-					if (!Dialogs.showYesNoDialog("Replace open image", "Close " + ServerTools.getDisplayableImageName(server) + "?"))
+					if (!Dialogs.showYesNoDialog(
+							QuPathResources.getString("QuPathGUI.replaceOpenImage"),
+							MessageFormat.format(
+									QuPathResources.getString("QuPathGUI.close"),
+									ServerTools.getDisplayableImageName(server)
+							)
+					))
 						return false;
 				}
 				ImageData<BufferedImage> imageData = null;
@@ -1781,19 +1919,23 @@ public class QuPathGUI {
 						double requiredBytes = estimatedBytes * (4.0/3.0);
 						if (prompt && imageRegionStore != null && requiredBytes >= imageRegionStore.getTileCacheSize()) {
 							logger.warn("Selected image is {} x {} x {} pixels ({})", serverNew.getWidth(), serverNew.getHeight(), serverNew.nChannels(), serverNew.getPixelType());
-							Dialogs.showErrorMessage("Image too large",
-									"Non-pyramidal image is too large for the available tile cache!\n" +
-									"Try converting the image to a pyramidal file format, or increasing the memory available to QuPath.");
+							Dialogs.showErrorMessage(
+									QuPathResources.getString("QuPathGUI.imageTooLarge"),
+									QuPathResources.getString("QuPathGUI.imageTooLargeDescription")
+							);
 							return false;
 						}
 						// Offer to pyramidalize
 						var serverWrapped = ImageServers.pyramidalize(serverNew);
 						if (serverWrapped.nResolutions() > 1) {
 							if (prompt) {
-								var response = Dialogs.showYesNoCancelDialog("Auto pyramidalize",
-										"QuPath works best with large images saved in a pyramidal format.\n\n" +
-										"Do you want to generate a pyramid dynamically from " + ServerTools.getDisplayableImageName(serverNew) + "?" +
-										"\n(This requires more memory, but is usually worth it)");
+								var response = Dialogs.showYesNoCancelDialog(
+										QuPathResources.getString("QuPathGUI.autoPyramidalize"),
+										MessageFormat.format(
+												QuPathResources.getString("QuPathGUI.autoPyramidalizeDescription"),
+												ServerTools.getDisplayableImageName(serverNew)
+										)
+								);
 								if (response == ButtonType.CANCEL)
 									return false;
 								if (response == ButtonType.YES)
@@ -1805,7 +1947,7 @@ public class QuPathGUI {
                     boolean estimateType = PathPrefs.imageTypeSettingProperty().get() == ImageTypeSetting.AUTO_ESTIMATE;
                     if (!request.load(() -> {
                         try {
-                            imageRegionStore.getThumbnail(openedServer, 0, 0, true);
+                            imageRegionStore.getThumbnailCache().getThumbnail(openedServer);
                             return createNewImageData(openedServer, estimateType);
                         } catch (Exception error) {
                             try { openedServer.close(); } catch (Exception close) { error.addSuppressed(close); }
@@ -1818,14 +1960,17 @@ public class QuPathGUI {
 				
 
 				if (imageData.getImageType() == ImageType.UNSET && PathPrefs.imageTypeSettingProperty().get() == ImageTypeSetting.PROMPT) {
-					var type = GuiTools.estimateImageType(serverNew, imageRegionStore.getThumbnail(serverNew, 0, 0, true));
+					var type = GuiTools.estimateImageType(serverNew, imageRegionStore.getThumbnailCache().getThumbnail(serverNew));
 					ImageDetailsPane.promptToSetImageType(imageData, type);
 				}
 
 				return true;
 			} else {
 				// Show an error message if we can't open the file
-				Dialogs.showErrorNotification("Open image", "Sorry, I can't open " + pathNew);
+				Dialogs.showErrorNotification(
+						QuPathResources.getString("QuPathGUI.openImage"),
+						MessageFormat.format(QuPathResources.getString("QuPathGUI.cannotOpen"), pathNew)
+				);
 			}
 		}
 		return false;
@@ -1850,7 +1995,7 @@ public class QuPathGUI {
 	 * @return
 	 */
 	private ImageData<BufferedImage> createNewImageData(final ImageServer<BufferedImage> server, final boolean estimateImageType) {
-		return new ImageData<>(server, estimateImageType ? GuiTools.estimateImageType(server, imageRegionStore.getThumbnail(server, 0, 0, true)) : ImageData.ImageType.UNSET);
+		return new ImageData<>(server, estimateImageType ? GuiTools.estimateImageType(server, imageRegionStore.getThumbnailCache().getThumbnail(server)) : ImageData.ImageType.UNSET);
 	}
 	
 	
@@ -1868,7 +2013,7 @@ public class QuPathGUI {
 			try {
 				runScript(file, null);
 			} catch (ScriptException e) {
-				Dialogs.showErrorMessage("Script error", e.getLocalizedMessage());
+				Dialogs.showErrorMessage(QuPathResources.getString("QuPathGUI.scriptError"), e.getLocalizedMessage());
 				logger.error(e.getMessage(), e);
 			}
 		});
@@ -1888,7 +2033,7 @@ public class QuPathGUI {
 			try {
 				runScript(null, script);
 			} catch (ScriptException e) {
-				Dialogs.showErrorMessage("Script error", e.getLocalizedMessage());
+				Dialogs.showErrorMessage(QuPathResources.getString("QuPathGUI.scriptError"), e.getLocalizedMessage());
 				logger.error(e.getMessage(), e);
 			}
 		});
@@ -2064,7 +2209,7 @@ public class QuPathGUI {
 	/**
 	 * Set an accelerator for the specified menu command.
 	 * The command is defined as described in {@link #lookupMenuItem(String, String...)}, 
-	 * and the accelerator is the the format used by {@link KeyCombination#valueOf(String)}.
+	 * and the accelerator is the format used by {@link KeyCombination#valueOf(String)}.
 	 * An example:
 	 * <pre>
 	 * <code> 
@@ -2211,7 +2356,7 @@ public class QuPathGUI {
 			try {
 				runPlugin(plugin, arg, true);
 			} catch (Exception e) {
-				logger.error("Error running " + plugin.getName() + ": " + e.getLocalizedMessage(), e);
+                logger.error("Error running {}: {}", plugin.getName(), e.getLocalizedMessage(), e);
 			}
 		});
 		// We assume that plugins require image data
@@ -2252,7 +2397,7 @@ public class QuPathGUI {
 					PathPlugin<BufferedImage> plugin = qupath.createPlugin(pluginClass);
 					qupath.runPlugin(plugin, arg, true);
 				} catch (Exception e) {
-					logger.error("Error running " + name + ": " + e.getLocalizedMessage(), e);
+                    logger.error("Error running {}: {}", name, e.getLocalizedMessage(), e);
 				}
 			});
 			// We assume that plugins require image data
@@ -2260,7 +2405,7 @@ public class QuPathGUI {
 			ActionTools.parseAnnotations(action, pluginClass);
 			return action;
 		} catch (Exception e) {
-			logger.error("Unable to initialize plugin " + pluginClass + ": " + e.getLocalizedMessage(), e);
+            logger.error("Unable to initialize plugin {}: {}", pluginClass, e.getLocalizedMessage(), e);
 		}
 		return null;
 	}
@@ -2527,7 +2672,7 @@ public class QuPathGUI {
 		var entry = project == null ? null : project.getEntry(imageData);
 		if (entry == null) {
 			if (PathPrefs.maskImageNamesProperty().get())
-				return "(Name masked)";
+				return QuPathResources.getString("QuPathGUI.nameMasked");
 			return ServerTools.getDisplayableImageName(imageData.getServer());
 		} else {
 			// Make sure that the status of name masking has been set in the project (in case it hasn't been triggered yet...)
@@ -2585,7 +2730,10 @@ public class QuPathGUI {
 				currentProject.syncChanges();
 			} catch (IOException e) {
 				logger.error("Error syncing project", e);
-				if (!Dialogs.showYesNoDialog("Project error", "A problem occurred while saving the last project - do you want to continue?"))
+				if (!Dialogs.showYesNoDialog(
+						QuPathResources.getString("QuPathGUI.projectError"),
+						QuPathResources.getString("QuPathGUI.problemWhileSavingLastProject")
+				))
 					return;
 			}
 		}
@@ -2610,7 +2758,13 @@ public class QuPathGUI {
 				if (!ProjectCommands.promptToCheckURIs(project, true))
 					return;
 			} catch (IOException e) {
-				Dialogs.showErrorMessage("Update URIs", "Error updating URIs\n" + e.getLocalizedMessage());
+				Dialogs.showErrorMessage(
+						QuPathResources.getString("QuPathGUI.updateUris"),
+						MessageFormat.format(
+								QuPathResources.getString("QuPathGUI.errorUpdatingUris"),
+								e.getLocalizedMessage()
+						)
+				);
 				logger.error(e.getMessage(), e);
 				return;
 			}
@@ -2714,7 +2868,10 @@ public class QuPathGUI {
 	 * the image was successfully closed), false otherwise (e.g. if the user thwarted the close request)
 	 */
 	public boolean closeViewer(final QuPathViewer viewer) {
-		return requestToCloseViewer(viewer, "Save changes");
+		return requestToCloseViewer(
+				viewer,
+				QuPathResources.getString("QuPathGUI.saveChanges")
+		);
 	}
 
 	/**
@@ -2759,15 +2916,26 @@ public class QuPathGUI {
 		}
 		ButtonType response = ButtonType.YES;
 		if (imageData.isChanged()) {
-			response = Dialogs.showYesNoCancelDialog(dialogTitle, "Save changes to " + ServerTools.getDisplayableImageName(imageData.getServer()) + "?");
+			response = Dialogs.showYesNoCancelDialog(
+					dialogTitle,
+					MessageFormat.format(
+							QuPathResources.getString("QuPathGUI.saveChangesTo"),
+							ServerTools.getDisplayableImageName(imageData.getServer())
+					)
+			);
 		}
 		if (response == ButtonType.CANCEL)
 			return false;
 		if (response == ButtonType.YES) {
 			if (filePrevious == null && entry == null) {
-				filePrevious = FileChoosers.promptToSaveFile("Save image data",
+				filePrevious = FileChoosers.promptToSaveFile(
+						QuPathResources.getString("QuPathGUI.saveImageData"),
 						new File(ServerTools.getDisplayableImageName(imageData.getServer())),
-						FileChoosers.createExtensionFilter("QuPath Serialized Data", PathPrefs.getSerializationExtension()));
+						FileChoosers.createExtensionFilter(
+								QuPathResources.getString("QuPathGUI.serializedData"),
+								PathPrefs.getSerializationExtension()
+						)
+				);
 				if (filePrevious == null)
 					return false;
 			}
@@ -2778,7 +2946,13 @@ public class QuPathGUI {
 				} else
 					if (!BackgroundImageSave.save(imageData, null, filePrevious.toPath())) return false;
 			} catch (IOException e) {
-				Dialogs.showErrorMessage("Save ImageData", "Error saving image data\n" + e.getLocalizedMessage());
+				Dialogs.showErrorMessage(
+						QuPathResources.getString("QuPathGUI.saveImageData"),
+						MessageFormat.format(
+								QuPathResources.getString("QuPathGUI.errorSavingImageData"),
+								e.getLocalizedMessage()
+						)
+				);
 				logger.error(e.getMessage(), e);
 				return false;
 			}
@@ -2808,7 +2982,7 @@ public class QuPathGUI {
 		var action = new Action(e -> {
 			var imageData = getImageData();
 			if (imageData == null)
-				GuiTools.showNoImageError("No image");
+				GuiTools.showNoImageError(QuPathResources.getString("QuPathGUI.noImage"));
 			else
 				command.accept(imageData);
 		});
@@ -2858,7 +3032,10 @@ public class QuPathGUI {
 		var action = new Action(e -> {
 			var viewer = getViewer();
 			if (viewer == null)
-				Dialogs.showErrorMessage("No viewer", "This command required an active viewer!");
+				Dialogs.showErrorMessage(
+						QuPathResources.getString("QuPathGUI.noViewer"),
+						QuPathResources.getString("QuPathGUI.requiresActiveViewer")
+				);
 			else
 				command.accept(viewer);
 		});
@@ -2891,7 +3068,7 @@ public class QuPathGUI {
 		var action = new Action(e -> {
 			var project = getProject();
 			if (project == null)
-				GuiTools.showNoProjectError("No project");
+				GuiTools.showNoProjectError(QuPathResources.getString("QuPathGUI.noProject"));
 			else
 				command.accept(project);
 		});

@@ -26,6 +26,7 @@ package qupath.lib.gui.images.servers;
 import qupath.lib.analysis.DelaunayTools;
 import qupath.lib.awt.common.AwtTools;
 import qupath.lib.color.ColorToolsAwt;
+import qupath.lib.gui.localization.QuPathResources;
 import qupath.lib.gui.viewer.OverlayOptions;
 import qupath.lib.gui.viewer.PathObjectPainter;
 import qupath.lib.images.ImageData;
@@ -61,9 +62,6 @@ import java.util.stream.Collectors;
 /**
  * A special {@link ImageServer} implementation that doesn't have a backing image, but rather
  * constructs tiles on request from a {@link PathObjectHierarchy} and its detection objects.
- * 
- * @author Pete Bankhead
- *
  */
 public class PathHierarchyImageServer extends AbstractTileableImageServer implements GeneratingImageServer<BufferedImage> {
 	
@@ -92,10 +90,7 @@ public class PathHierarchyImageServer extends AbstractTileableImageServer implem
 	public PathHierarchyImageServer(final ImageData<BufferedImage> imageData, final OverlayOptions options) {
 		this(DEFAULT_PREFIX + " " + counter + "::", imageData, options);
 	}
-	
-//	public PathHierarchyImageServer(final ImageServer<BufferedImage> server, final PathObjectHierarchy hierarchy, final OverlayOptions options) {
-//		this(DEFAULT_PREFIX + " " + counter + "::", server, hierarchy, options);
-//	}
+
 	
 	
 	private PathHierarchyImageServer(final String prefix, final ImageData<BufferedImage> imageData, final OverlayOptions options) {
@@ -178,7 +173,7 @@ public class PathHierarchyImageServer extends AbstractTileableImageServer implem
 
 	@Override
 	public String getServerType() {
-		return "Overlay";
+		return QuPathResources.getString("Images.PathHierarchyImageServer.type");
 	}
 
 	@Override

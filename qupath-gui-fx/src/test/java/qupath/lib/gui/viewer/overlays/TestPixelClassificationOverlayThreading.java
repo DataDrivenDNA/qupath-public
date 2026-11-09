@@ -12,9 +12,12 @@ import qupath.lib.gui.viewer.OverlayOptions;
 import qupath.lib.gui.viewer.RegionFilter;
 import qupath.lib.images.ImageData;
 import qupath.lib.images.servers.ImageServer;
+import qupath.lib.images.servers.ImageServerMetadata;
 import qupath.lib.images.servers.TileRequest;
 import qupath.lib.images.servers.WrappedBufferedImageServer;
 import qupath.lib.regions.ImageRegion;
+import qupath.lib.objects.classes.PathClass;
+import qupath.opencv.ml.pixel.PixelClassificationMeasurementManager;
 
 import java.awt.image.BufferedImage;
 import java.util.Map;
@@ -26,6 +29,35 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.*;
 
 class TestPixelClassificationOverlayThreading {
+
+    @Test
+    void requestedTilesReachTheSharedCacheAndNotifyLiveMeasurements() throws Exception {
+        try (var server = new WrappedBufferedImageServer("uncached-classifier",
+                new BufferedImage(64, 64, BufferedImage.TYPE_BYTE_GRAY))) {
+            server.setMetadata(new ImageServerMetadata.Builder(server.getMetadata())
+                    .channelType(ImageServerMetadata.ChannelType.CLASSIFICATION)
+                    .classificationLabels(Map.of(0, PathClass.fromString("tissue"), 1, PathClass.fromString("empty")))
+                    .build());
+            var data = new ImageData<>(server);
+            var notified = new CountDownLatch(1);
+            var manager = new PixelClassificationMeasurementManager(server);
+            var tile = server.getTileRequestManager().getAllTileRequests().iterator().next();
+            var overlay = FxTestTools.call(() -> PixelClassificationOverlay.create(new OverlayOptions(),
+                    new java.util.HashMap<>(Map.<ImageData<BufferedImage>, ImageServer<BufferedImage>>of(data, server)), null));
+            data.getHierarchy().addListener(event -> {
+                if (event.getSource() == overlay && event.isObjectMeasurementEvent()) notified.countDown();
+            });
+            try {
+                assertNull(server.getCachedTile(tile));
+                overlay.requestTile(tile, data, server);
+                assertTrue(notified.await(10, TimeUnit.SECONDS));
+                assertNotNull(server.getCachedTile(tile));
+                assertEquals(100.0, manager.getCachedMeasurementValue(data.getHierarchy().getRootObject(), "tissue %").doubleValue());
+            } finally {
+                FxTestTools.call(() -> { overlay.stop(); return null; });
+            }
+        }
+    }
 
     @Test
     void viewsOfTheSameImageDoNotShareAnnotationFilterResults() throws Exception {

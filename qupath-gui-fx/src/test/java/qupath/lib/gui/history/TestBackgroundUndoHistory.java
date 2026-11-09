@@ -7,7 +7,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import qupath.lib.gui.UndoRedoManager;
 import qupath.lib.gui.background.BackgroundTasks;
-import qupath.lib.gui.images.stores.ImageRegionStoreFactory;
+import qupath.lib.images.stores.DefaultImageRegionStore;
 import qupath.lib.gui.tools.FxTestTools;
 import qupath.lib.gui.viewer.*;
 import qupath.lib.images.*;
@@ -77,7 +77,7 @@ class TestBackgroundUndoHistory {
 
     @Test void nativeViewerUndoAndRedoApplyTheCorrectHierarchy() throws Exception {
         try (var data = data()) {
-            var store = ImageRegionStoreFactory.createImageRegionStore(1024*1024);
+            var store = DefaultImageRegionStore.getSharedInstance();
             var viewer = FxTestTools.call(() -> {
                 var v = new QuPathViewer(store, new OverlayOptions()); v.getView(); v.setImageData(data); return v;
             });
@@ -88,7 +88,7 @@ class TestBackgroundUndoHistory {
                 assertEquals(1, data.getHierarchy().getAnnotationObjects().size());
                 assertTrue(submit(manager::redoOnce).get(10, TimeUnit.SECONDS));
                 assertEquals(2, data.getHierarchy().getAnnotationObjects().size());
-            } finally { FxTestTools.call(() -> { viewer.closeViewer(); return null; }); store.close(); }
+            } finally { FxTestTools.call(() -> { viewer.closeViewer(); return null; }); }
         }
     }
 
@@ -110,7 +110,7 @@ class TestBackgroundUndoHistory {
 
     @Test void beginningAStrokeWhileUndoWaitsPreservesTheStrokeAndHistory() throws Exception {
         try (var data = data(); var blocker = new Blocker()) {
-            var store = ImageRegionStoreFactory.createImageRegionStore(1024*1024);
+            var store = DefaultImageRegionStore.getSharedInstance();
             var viewer = FxTestTools.call(() -> {
                 var v = new QuPathViewer(store, new OverlayOptions()); v.getView(); v.setImageData(data); return v;
             });
@@ -127,13 +127,13 @@ class TestBackgroundUndoHistory {
                 FxTestTools.call(() -> { viewer.setSelectedObject(null); return null; });
                 assertTrue(submit(manager::undoOnce).get(10, TimeUnit.SECONDS));
                 assertEquals(1, data.getHierarchy().getAnnotationObjects().size());
-            } finally { FxTestTools.call(() -> { viewer.closeViewer(); return null; }); store.close(); }
+            } finally { FxTestTools.call(() -> { viewer.closeViewer(); return null; }); }
         }
     }
 
     @Test void closingOneViewerKeepsHistoryListeningForAnotherViewOfTheSameImage() throws Exception {
         try (var data = data()) {
-            var store = ImageRegionStoreFactory.createImageRegionStore(1024*1024);
+            var store = DefaultImageRegionStore.getSharedInstance();
             var viewers = FxTestTools.call(() -> {
                 var one = new QuPathViewer(store, new OverlayOptions()); one.getView(); one.setImageData(data);
                 var two = new QuPathViewer(store, new OverlayOptions()); two.getView(); two.setImageData(data);
@@ -148,7 +148,7 @@ class TestBackgroundUndoHistory {
                 });
                 assertTrue(submit(manager::undoOnce).get(10, TimeUnit.SECONDS));
                 assertEquals(2, data.getHierarchy().getAnnotationObjects().size());
-            } finally { FxTestTools.call(() -> { viewers.getLast().closeViewer(); return null; }); store.close(); }
+            } finally { FxTestTools.call(() -> { viewers.getLast().closeViewer(); return null; }); }
         }
     }
 

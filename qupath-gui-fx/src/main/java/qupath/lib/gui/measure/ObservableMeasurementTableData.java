@@ -36,6 +36,7 @@ import javafx.collections.transformation.FilteredList;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import qupath.lib.common.GeneralTools;
+import qupath.lib.gui.localization.QuPathResources;
 import qupath.lib.gui.prefs.PathPrefs;
 import qupath.lib.images.ImageData;
 import qupath.lib.images.servers.ImageServer;
@@ -46,6 +47,7 @@ import qupath.lib.objects.PathObject;
 import qupath.lib.objects.TMACoreObject;
 
 import java.awt.image.BufferedImage;
+import java.text.MessageFormat;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -386,7 +388,10 @@ public class ObservableMeasurementTableData implements PathTableData<PathObject>
 		if (builder != null)
 			return builder.getHelpText();
 		else
-			return "The measurement '" + column + "' from the object's measurement list, or NaN if the measurement is not found";
+			return MessageFormat.format(
+					QuPathResources.getString("Measure.MeasurementTable.measurementFromObjectMeasurementList"),
+					column
+			);
 	}
 
 	@Override

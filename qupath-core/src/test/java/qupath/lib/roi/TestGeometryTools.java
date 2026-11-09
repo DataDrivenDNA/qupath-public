@@ -35,6 +35,7 @@ import org.locationtech.jts.operation.valid.IsValidOp;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import qupath.lib.geom.Point2;
+import qupath.lib.objects.PathObject;
 import qupath.lib.objects.hierarchy.PathObjectHierarchy;
 import qupath.lib.regions.ImagePlane;
 import qupath.lib.roi.interfaces.ROI;
@@ -100,55 +101,55 @@ public class TestGeometryTools {
 	 */
 	@Test
 	public void testComplexROIs() {
-		
+
 		File fileHierarchy = new File("src/test/resources/data/test-objects.hierarchy");
 		try (InputStream stream = Files.newInputStream(fileHierarchy.toPath())) {
-			var hierarchy = (PathObjectHierarchy)new ObjectInputStream(stream).readObject();
-			var geometries = hierarchy.getFlattenedObjectList(null).stream().filter(p -> p.hasROI()).map(p -> p.getROI().getGeometry()).collect(Collectors.toCollection(() -> new ArrayList<>()));
-			
+			var hierarchy = (PathObjectHierarchy) new ObjectInputStream(stream).readObject();
+			var geometries = hierarchy.getFlattenedObjectList(null).stream().filter(PathObject::hasROI).map(p -> p.getROI().getGeometry()).collect(Collectors.toCollection(ArrayList::new));
+
 			// Include some extra geometries that we know can be troublesome
 			var rectangle = GeometryTools.createRectangle(0, 0, 100, 100);
-			var ring = (Polygon)rectangle.buffer(100).difference(rectangle);
+			var ring = (Polygon) rectangle.buffer(100).difference(rectangle);
 			geometries.add(ring);
 			var nested = ring.union(rectangle.buffer(-40));
 			geometries.add(nested);
 			var nested2 = nested.difference(rectangle.buffer(-45));
 			geometries.add(nested2);
-			
-			var filledNested = (Polygon)GeometryTools.fillHoles(nested);
+
+			var filledNested = (Polygon) GeometryTools.fillHoles(nested);
 			assertNotEquals(nested.getArea(), filledNested.getArea());
-			assertNotEquals(nested.getNumGeometries(), 1);
-			assertEquals(filledNested.getNumInteriorRing(), 0);
+			assertNotEquals(1, nested.getNumGeometries());
+			assertEquals(0, filledNested.getNumInteriorRing());
 			assertEquals(filledNested.getArea(), GeometryTools.externalRingArea(filledNested));
 
-			var filledNested2 = (Polygon)GeometryTools.fillHoles(nested2);
+			var filledNested2 = (Polygon) GeometryTools.fillHoles(nested2);
 			assertNotEquals(nested2.getArea(), filledNested2.getArea());
-			assertNotEquals(nested2.getNumGeometries(), 1);
-			assertEquals(filledNested2.getNumInteriorRing(), 0);
+			assertNotEquals(1, nested2.getNumGeometries());
+			assertEquals(0, filledNested2.getNumInteriorRing());
 			assertEquals(filledNested2.getArea(), GeometryTools.externalRingArea(filledNested2));
 
 			for (var geom : geometries) {
-				
-				assertTrue(geom.isValid());
-				
-				var geom2 = GeometryTools.fillHoles(geom);
-				assertTrue(geom2.isValid());
-				
-				geom2 = GeometryTools.removeFragments(geom, geom.getArea()/2);
-				assertTrue(geom2.isValid());
 
-				geom2 = GeometryTools.refineAreas(geom, geom.getArea()/2, geom.getArea()/2);
-				assertTrue(geom2.isValid());
-				
-				geom2 = GeometryTools.ensurePolygonal(geom);
-				assertTrue(geom2.isValid());			
+				assertTrue(geom.isValid(), () -> "Invalid geometry: " + geom);
+
+				var geom2 = GeometryTools.fillHoles(geom);
+				assertTrue(geom2.isValid(), () -> "Invalid geometry: " + geom2);
+
+				var geom3 = GeometryTools.removeFragments(geom, geom.getArea() / 2);
+				assertTrue(geom3.isValid(), () -> "Invalid geometry: " + geom3);
+
+				var geom4 = GeometryTools.refineAreas(geom, geom.getArea() / 2, geom.getArea() / 2);
+				assertTrue(geom4.isValid(), () -> "Invalid geometry: " + geom4);
+
+				var geom5 = GeometryTools.ensurePolygonal(geom);
+				assertTrue(geom5.isValid(), () -> "Invalid geometry: " + geom5);
 			}
 			var geom2 = GeometryTools.union(geometries);
-			assertTrue(geom2.isValid());
+			assertTrue(geom2.isValid(), () -> "Invalid geometry: " + geom2);
 		} catch (Exception e) {
 			fail(e);
 		}
-		
+
 	}
 
 	@Test

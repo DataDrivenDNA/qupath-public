@@ -65,9 +65,6 @@ import java.util.stream.Collectors;
 
 /**
  * Helper methods for working with pixel classification.
- * 
- * @author Pete Bankhead
- *
  */
 public class PixelClassifierTools {
 
@@ -244,7 +241,7 @@ public class PixelClassifierTools {
 			var parent = entry.getKey();
 			var children = entry.getValue();
 			if (clearExisting && parent.hasChildObjects())
-				parent.clearChildObjects();
+				parent.removeAllChildObjects();
 			parent.addChildObjects(children);
 			if (!parent.isRootObject())
 				parent.setLocked(true);

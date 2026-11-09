@@ -2,7 +2,7 @@
  * #%L
  * This file is part of QuPath.
  * %%
- * Copyright (C) 2025 QuPath developers, The University of Edinburgh
+ * Copyright (C) 2025-2026 QuPath developers, The University of Edinburgh
  * %%
  * QuPath is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as
@@ -24,6 +24,7 @@ package qupath.lib.gui.viewer;
 import javafx.beans.binding.Bindings;
 import javafx.beans.property.DoubleProperty;
 import javafx.beans.property.IntegerProperty;
+import javafx.beans.property.ObjectProperty;
 import javafx.beans.property.SimpleDoubleProperty;
 import javafx.beans.property.SimpleIntegerProperty;
 import javafx.beans.value.ObservableValue;
@@ -40,6 +41,7 @@ import javafx.scene.layout.GridPane;
 import javafx.scene.layout.Pane;
 import qupath.fx.utils.FXUtils;
 import qupath.lib.common.GeneralTools;
+import qupath.lib.gui.localization.QuPathResources;
 
 /**
  * Controls to navigate z slices and time points in the viewer.
@@ -47,22 +49,37 @@ import qupath.lib.common.GeneralTools;
  */
 class ViewerDimensionControls {
 
+    // Create z and t properties.
+    // We need them as object properties for bidirectional binding to a spinner's value property.
+    // Before JavaFX 27, we avoided this by adding listeners to the IntegerProperty.
+    // However, this started causing StackOverflowExceptions in JavaFX 27.
+
     private final IntegerProperty zPositionProperty = new SimpleIntegerProperty();
+    private final ObjectProperty<Integer> zPositionObjectProperty = zPositionProperty.asObject();
     private final IntegerProperty zMaxProperty = new SimpleIntegerProperty();
 
     private final IntegerProperty tPositionProperty = new SimpleIntegerProperty();
+    private final ObjectProperty<Integer> tPositionObjectProperty = tPositionProperty.asObject();
     private final IntegerProperty tMaxProperty = new SimpleIntegerProperty();
 
     private final DoubleProperty contentOpacityProperty = new SimpleDoubleProperty(1.0);
 
-    private final Spinner<Integer> spinnerZ = createSpinner(zPositionProperty, zMaxProperty, "Z-slice");
-    private final Spinner<Integer> spinnerT = createSpinner(tPositionProperty, tMaxProperty, "Time point");
+    private final Spinner<Integer> spinnerZ = createSpinner(
+            zPositionObjectProperty,
+            zMaxProperty,
+            QuPathResources.getString("Viewer.ViewerDimensionControls.zSlice")
+    );
+    private final Spinner<Integer> spinnerT = createSpinner(
+            tPositionObjectProperty,
+            tMaxProperty,
+            QuPathResources.getString("Viewer.ViewerDimensionControls.timePoint")
+    );
 
     private final ProgressBar progressZ = createProgressBar(zPositionProperty, zMaxProperty);
     private final ProgressBar progressT = createProgressBar(tPositionProperty, tMaxProperty);
 
-    private final Label labelZ = createLabel("Z: ", spinnerZ);
-    private final Label labelT = createLabel("Time: ", spinnerT);
+    private final Label labelZ = createLabel(QuPathResources.getString("Viewer.ViewerDimensionControls.z") + " ", spinnerZ);
+    private final Label labelT = createLabel(QuPathResources.getString("Viewer.ViewerDimensionControls.time") + " ", spinnerT);
 
     private final GridPane pane = new GridPane();
 
@@ -80,7 +97,7 @@ class ViewerDimensionControls {
     private ProgressBar createProgressBar(IntegerProperty property, IntegerProperty maxProperty) {
         var progress = new ProgressBar();
         progress.setMaxWidth(Double.MAX_VALUE);
-        progress.setPrefHeight(10);
+        progress.setPrefHeight(15);
         progress.progressProperty().bind(Bindings.createDoubleBinding(() -> property.doubleValue() / (maxProperty.get() - 1),
                 property, maxProperty));
         progress.opacityProperty().bind(contentOpacityProperty);
@@ -91,18 +108,18 @@ class ViewerDimensionControls {
 
     private void updateFromProgress(ProgressBar progress, double x, IntegerProperty prop, IntegerProperty max) {
         int val = (int)Math.round(x / progress.getWidth() * max.doubleValue());
-        prop.setValue(GeneralTools.clipValue(val, 0, max.get()));
+        prop.setValue(GeneralTools.clipValue(val, 0, max.get()-1));
     }
 
-    private Spinner<Integer> createSpinner(IntegerProperty property, IntegerProperty maxProperty,
+    private Spinner<Integer> createSpinner(ObjectProperty<Integer> property, IntegerProperty maxProperty,
                                            String name) {
         var factory = new SpinnerValueFactory.IntegerSpinnerValueFactory(0, 1);
-        maxProperty.addListener((v, o, n) -> factory.setMax(Math.max(0, n.intValue() - 1)));
+        factory.maxProperty().bind(Bindings.max(0, maxProperty.subtract(1)));
+
         var spinner = new Spinner<>(factory);
-        factory.valueProperty().addListener((v, o, n) -> property.setValue(n));
-        property.addListener((v, o, n) -> factory.setValue((Integer) n));
         spinner.setPrefWidth(70);
         spinner.setEditable(true);
+        factory.valueProperty().bindBidirectional(property);
         FXUtils.resetSpinnerNullToPrevious(spinner);
 
         var tooltip = new Tooltip();
